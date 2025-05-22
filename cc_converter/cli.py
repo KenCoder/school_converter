@@ -2,6 +2,10 @@ import argparse
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Iterable
+
+from .models import Document, TextRun
+from .parser import parse_assessment
 
 
 def parse_args(argv=None):
@@ -15,18 +19,45 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _create_docx(doc_path: Path, text: str) -> None:
-    """Create a docx file containing ``text`` using ``python-docx``."""
+def _add_runs(paragraph, runs: Iterable[TextRun]) -> None:
+    for run_data in runs:
+        run = paragraph.add_run(run_data.text)
+        run.font.superscript = run_data.superscript
+        run.font.subscript = run_data.subscript
+
+
+def _create_docx(doc_path: Path, document: Document, zf: zipfile.ZipFile) -> None:
+    """Create a docx file for ``document`` using ``python-docx``."""
 
     try:
-        from docx import Document
+        from docx import Document as Doc
     except Exception as exc:  # pragma: no cover - raises when dependency missing
         raise ImportError(
             "The 'python-docx' package is required to create docx files"
         ) from exc
 
-    doc = Document()
-    doc.add_paragraph(text)
+    doc = Doc()
+    doc.add_heading(document.title, level=1)
+    for idx, question in enumerate(document.questions, start=1):
+        doc.add_paragraph(f"Question {idx}:")
+        qp = doc.add_paragraph()
+        _add_runs(qp, question.text)
+        for img in question.images:
+            try:
+                with zf.open(img) as img_file:
+                    doc.add_picture(img_file)
+            except KeyError:
+                pass
+        for ans in question.answers:
+            ap = doc.add_paragraph(style="List Bullet")
+            _add_runs(ap, ans.text)
+            for img in ans.images:
+                try:
+                    with zf.open(img) as img_file:
+                        doc.add_picture(img_file)
+                except KeyError:
+                    pass
+
     doc.save(doc_path)
 
 
@@ -43,11 +74,21 @@ def convert_cartridge_to_doc(cartridge: Path, output_dir: Path):
         resources = root.findall(".//ns:resource", ns)
 
         for res in resources:
-            identifier = res.get("identifier")
-            if not identifier:
+            file_elem = res.find("ns:file", ns)
+            if file_elem is None:
                 continue
-            doc_path = output_dir / f"{identifier}.docx"
-            _create_docx(doc_path, identifier)
+            href = file_elem.get("href")
+            if not href:
+                continue
+            with zf.open(href) as f:
+                xml_text = f.read().decode("utf-8")
+            doc_model = parse_assessment(xml_text)
+            name = doc_model.title or res.get("identifier")
+            illegal = '<>:"/\\|?*'
+            for ch in illegal:
+                name = name.replace(ch, "_")
+            doc_path = output_dir / f"{name}.docx"
+            _create_docx(doc_path, doc_model, zf)
 
     print(f"Created {len(resources)} docx files in {output_dir}")
 

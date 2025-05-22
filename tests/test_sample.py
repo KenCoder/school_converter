@@ -30,11 +30,11 @@ class TestSampleCartridge(unittest.TestCase):
         except Exception:
             patch_create = True
 
-        def fake_create_docx(doc_path: Path, text: str) -> None:
+        def fake_create_docx(doc_path: Path, document, zf):
             document_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">
   <w:body>
-    <w:p><w:r><w:t>{text}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>{document.title}</w:t></w:r></w:p>
   </w:body>
 </w:document>"""
 
@@ -73,6 +73,20 @@ class TestSampleCartridge(unittest.TestCase):
         finally:
             if patch_create:
                 cli._create_docx = original
+
+    def test_parse_all_documents(self):
+        import cc_converter.parser as parser
+        with zipfile.ZipFile(SAMPLE, 'r') as zf:
+            with zf.open('imsmanifest.xml') as manifest_file:
+                tree = ET.parse(manifest_file)
+            root = tree.getroot()
+            ns = {'ns': root.tag.split('}')[0].strip('{')}
+            for res in root.findall('.//ns:resource', ns):
+                href = res.find('ns:file', ns).get('href')
+                with zf.open(href) as f:
+                    xml_text = f.read().decode('utf-8')
+                doc = parser.parse_assessment(xml_text)
+                self.assertTrue(doc.questions)
 
 
 if __name__ == "__main__":
