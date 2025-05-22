@@ -3,7 +3,8 @@
 This repository contains a minimal command line application for converting
 1EdTech Common Cartridge (`.imscc`) files to document files. The conversion
 logic is not fully implemented; currently the application extracts the
-`imsmanifest.xml` from the cartridge as a placeholder.
+`imsmanifest.xml` from the cartridge as a placeholder. It relies on the
+`python-docx` package to generate the resulting documents.
 
 ## Usage
 
