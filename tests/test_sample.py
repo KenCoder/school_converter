@@ -18,17 +18,61 @@ class TestSampleCartridge(unittest.TestCase):
         self.assertEqual(6, len(resources))
 
     def test_converter_creates_docx_files(self):
+        """convert_cartridge_to_doc should create one docx per resource."""
+
         from tempfile import TemporaryDirectory
+        import cc_converter.cli as cli
         from cc_converter.cli import convert_cartridge_to_doc
 
-        with TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-            convert_cartridge_to_doc(SAMPLE, output_dir)
-            docs = sorted(output_dir.glob('*.docx'))
-            self.assertEqual(6, len(docs))
-            for doc in docs:
-                with zipfile.ZipFile(doc, 'r') as zf:
-                    self.assertIn('word/document.xml', zf.namelist())
+        try:
+            from docx import Document  # noqa: F401
+            patch_create = False
+        except Exception:
+            patch_create = True
+
+        def fake_create_docx(doc_path: Path, text: str) -> None:
+            document_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">
+  <w:body>
+    <w:p><w:r><w:t>{text}</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+
+            content_types = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">
+  <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>
+  <Default Extension=\"xml\" ContentType=\"application/xml\"/>
+  <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>
+</Types>
+"""
+
+            rels = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">
+  <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>
+</Relationships>
+"""
+
+            with zipfile.ZipFile(doc_path, "w") as zf:
+                zf.writestr("[Content_Types].xml", content_types)
+                zf.writestr("_rels/.rels", rels)
+                zf.writestr("word/document.xml", document_xml)
+
+        if patch_create:
+            original = cli._create_docx
+            cli._create_docx = fake_create_docx
+
+        try:
+            with TemporaryDirectory() as tmpdir:
+                output_dir = Path(tmpdir)
+                convert_cartridge_to_doc(SAMPLE, output_dir)
+                docs = sorted(output_dir.glob("*.docx"))
+                self.assertEqual(6, len(docs))
+                for doc in docs:
+                    with zipfile.ZipFile(doc, "r") as zf:
+                        self.assertIn("word/document.xml", zf.namelist())
+        finally:
+            if patch_create:
+                cli._create_docx = original
 
 
 if __name__ == "__main__":
