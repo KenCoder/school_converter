@@ -11,14 +11,17 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 class DocxConverter:
     """Converter for Assessment objects to docx files."""
 
-    def __init__(self, font_mapping: Optional[Dict[str, str]] = None):
+    def __init__(self, font_mapping: Optional[Dict[str, str]] = None, template_path: Optional[Path] = None):
         """Initialize the converter.
 
         Args:
             font_mapping: An optional mapping from font names in the source to
                 font names in docx.
+            template_path: Optional path to a template docx file. If not provided,
+                will use the default template in the package.
         """
         self.font_mapping = font_mapping or {}
+        self.template_path = template_path or Path(__file__).parent / 'template.docx'
 
     def convert_assessment(
         self, assessment: Assessment, output_path: Path,
@@ -40,8 +43,7 @@ class DocxConverter:
             )
 
         # Create a new document from template
-        template_path = Path(__file__).parent / 'template.docx'
-        doc = Document(template_path)
+        doc = Document(self.template_path)
 
         # Add the title
         doc.add_heading(assessment.title.strip(), level=1)
@@ -246,7 +248,8 @@ def convert_assessment_to_docx(
     output_path: Union[str, Path],
     resource_zip: Optional[Union[str, zipfile.ZipFile]] = None,
     font_mapping: Optional[Dict[str, str]] = None,
-    is_answer_key: bool = False
+    is_answer_key: bool = False,
+    template_path: Optional[Union[str, Path]] = None
 ):
     """Convert an Assessment object to a docx file.
 
@@ -255,8 +258,13 @@ def convert_assessment_to_docx(
         output_path: The path where the docx file will be saved.
         resource_zip: An optional zipfile or path to a zipfile containing resources.
         font_mapping: An optional mapping from font names in the source to font names in docx.
+        is_answer_key: Whether to generate an answer key version.
+        template_path: Optional path to a template docx file. If not provided,
+            will use the default template in the package.
     """
     output_path = Path(output_path)
+    if template_path:
+        template_path = Path(template_path)
 
     # Create parent directory if it doesn't exist
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,7 +277,7 @@ def convert_assessment_to_docx(
 
     try:
         # Create converter and convert
-        converter = DocxConverter(font_mapping)
+        converter = DocxConverter(font_mapping, template_path)
         converter.convert_assessment(assessment, output_path, resource_zip, is_answer_key)
     finally:
         # Close the zipfile if we opened it
@@ -281,7 +289,8 @@ def convert_cartridge_to_docx(
     cartridge_path: Union[str, Path],
     output_dir: Union[str, Path],
     font_mapping: Optional[Dict[str, str]] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    template_path: Optional[Union[str, Path]] = None
 ):
     """Extract assessments from a cartridge and convert them to docx files.
 
@@ -290,12 +299,16 @@ def convert_cartridge_to_docx(
         output_dir: Directory where docx files will be saved.
         font_mapping: An optional mapping from font names in the source to font names in docx.
         limit: Maximum number of assessments to process (default: all).
+        template_path: Optional path to a template docx file. If not provided,
+            will use the default template in the package.
     """
     from .xml_parser import parse_cartridge
 
     # Normalize paths
     cartridge_path = Path(cartridge_path)
     output_dir = Path(output_dir)
+    if template_path:
+        template_path = Path(template_path)
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -311,8 +324,8 @@ def convert_cartridge_to_docx(
             for char in '<>:"/\\|?*':
                 filename = filename.replace(char, '_')
 
-            convert_assessment_to_docx(assessment, output_dir / f"{filename}.docx", zf, font_mapping, is_answer_key=False)
-            convert_assessment_to_docx(assessment, output_dir / f"{filename}_key.docx", zf, font_mapping, is_answer_key=True)
+            convert_assessment_to_docx(assessment, output_dir / f"{filename}.docx", zf, font_mapping, is_answer_key=False, template_path=template_path)
+            convert_assessment_to_docx(assessment, output_dir / f"{filename}_key.docx", zf, font_mapping, is_answer_key=True, template_path=template_path)
 
     return len(assessments) 
 
