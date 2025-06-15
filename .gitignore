@@ -1,0 +1,6 @@
+out/
+samples/
+venv/
+**/__pycache__/
+*.egg-info/
+

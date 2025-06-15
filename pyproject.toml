@@ -1,13 +1,22 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=42.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["cc_converter"]
 
 [project]
 name = "cc_converter"
+description = "Common Cartridge Format Converter"
 version = "0.1.0"
 readme = "README.md"
-requires-python = ">=3.8"
-dependencies = ["python-docx"]
+requires-python = ">=3.7"
+dependencies = [
+    "python-docx>=0.8.11",
+    "google-api-python-client>=2.86.0",
+    "google-auth-httplib2>=0.1.0",
+    "google-auth-oauthlib>=1.0.0",
+]
 
 [project.scripts]
 cc-convert = "cc_converter.cli:main"
