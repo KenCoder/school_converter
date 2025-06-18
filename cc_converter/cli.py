@@ -4,8 +4,8 @@ import glob
 from pathlib import Path
 from typing import Dict, Optional, List
 
-from .xml_parser import parse_extracted_file, ParserError
-from .docx_converter import convert_cartridge_to_docx, convert_assessment_to_docx
+from cc_converter.xml_parser import parse_extracted_file, ParserError
+from cc_converter.docx_converter import convert_cartridge_to_docx, convert_assessment_to_docx
 
 
 def parse_args(argv=None):

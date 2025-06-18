@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Tuple, Optional
 import html
 from copy import deepcopy
 
-from .models import (
+from cc_converter.models import (
     Assessment, Section, Item, ResponseOption, 
     TextRun, TextStyle, QuestionType, ImageInfo, TextContent
 )

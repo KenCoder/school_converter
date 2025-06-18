@@ -43,6 +43,29 @@ Example with font mapping:
 cc-convert quiz.imscc --font-map fonts.json
 ```
 
+## Creating Executables with PyInstaller
+
+To create a standalone executable using PyInstaller:
+
+1. Install PyInstaller:
+   ```bash
+   pip install pyinstaller
+   ```
+
+2. Build the executable:
+   ```bash
+   pyinstaller cli.spec
+   ```
+
+3. The executable will be created in the `dist/cc_converter/` directory.
+
+4. Run the executable:
+   ```bash
+   ./dist/cc_converter/cc_converter input.imscc output_directory
+   ```
+
+**Note**: The package has been configured to work with PyInstaller by using absolute imports instead of relative imports.
+
 ## Development
 
 Run tests with:

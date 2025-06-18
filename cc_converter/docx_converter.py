@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Union
 import zipfile
 
-from .models import Assessment, QuestionType, TextRun, TextStyle, ImageInfo, TextContent
+from cc_converter.models import Assessment, QuestionType, TextRun, TextStyle, ImageInfo, TextContent
 from docx.shared import Inches
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
@@ -302,7 +302,7 @@ def convert_cartridge_to_docx(
         template_path: Optional path to a template docx file. If not provided,
             will use the default template in the package.
     """
-    from .xml_parser import parse_cartridge
+    from cc_converter.xml_parser import parse_cartridge
 
     # Normalize paths
     cartridge_path = Path(cartridge_path)
