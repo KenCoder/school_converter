@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Handler</title>
+    <script>
+        // Function to handle file clicks
+        function handleFileClick(event) {
+            const link = event.target.closest('a');
+            if (!link) return;
+            
+            const href = link.getAttribute('href');
+            if (!href) return;
+            
+            // Check if it's a DOCX file
+            if (href.toLowerCase().endsWith('.docx')) {
+                event.preventDefault();
+                
+                // Try to open with Word using a custom protocol
+                // This will attempt to open the file with the default application
+                const fullPath = window.location.origin + window.location.pathname.replace('/file_handler.html', '') + '/' + href;
+                
+                // Create a temporary link to trigger file download/open
+                const tempLink = document.createElement('a');
+                tempLink.href = fullPath;
+                tempLink.download = ''; // This should trigger the default application
+                tempLink.style.display = 'none';
+                document.body.appendChild(tempLink);
+                tempLink.click();
+                document.body.removeChild(tempLink);
+                
+                // Also try to open with Word directly if possible
+                try {
+                    // This is a fallback method - may not work in all browsers
+                    window.open(fullPath, '_blank');
+                } catch (e) {
+                    console.log('Could not open file directly:', e);
+                }
+            }
+        }
+        
+        // Add click event listener to the document
+        document.addEventListener('DOMContentLoaded', function() {
+            document.addEventListener('click', handleFileClick);
+        });
+    </script>
+</head>
+<body>
+    <p>This file contains JavaScript to handle opening DOCX files with Word.</p>
+    <p>Include this script in your HTML files to enable automatic Word opening for DOCX files.</p>
+</body>
+</html> 

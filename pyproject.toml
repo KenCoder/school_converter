@@ -13,7 +13,10 @@ readme = "README.md"
 requires-python = ">=3.7"
 dependencies = [
     "python-docx>=0.8.11",
+    "pywebview>=4.0",
+    "watchdog>=3.0.0",
 ]
 
 [project.scripts]
 cc-convert = "cc_converter.cli:main"
+cc-gui = "cc_converter.gui:main"

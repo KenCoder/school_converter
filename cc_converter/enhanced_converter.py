@@ -44,6 +44,17 @@ class EnhancedConverter:
         self.referenced_resources: Set[str] = set()
         self.resources: Dict[str, Resource] = {}
         self.assessments: Dict[str, Any] = {}  # Store parsed assessments by resource ID
+        self.progress_callback = None
+        
+    def set_progress_callback(self, callback):
+        """Set a callback function for progress reporting."""
+        self.progress_callback = callback
+        
+    def _report_progress(self, message: str, progress: float = None):
+        """Report progress if callback is set."""
+        if self.progress_callback:
+            self.progress_callback(message, progress)
+        print(message)
         
     def convert_cartridge(self, cartridge_path: Path, output_dir: Path, limit: Optional[int] = None) -> None:
         """Convert a cartridge file to hierarchical structure with DOCX files.
@@ -53,28 +64,42 @@ class EnhancedConverter:
             output_dir: Path where the output should be created
             limit: Maximum number of assessments to process
         """
+        self._report_progress(f"Starting conversion of {cartridge_path.name}...", 0)
+        
         # Create output directory
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        self._report_progress("Parsing cartridge and extracting assessments...", 10)
         # Parse the cartridge to get assessments and loose files
         assessments, loose_files = parse_cartridge(str(cartridge_path), self.font_mapping, limit)
         
+        self._report_progress(f"Found {len(assessments)} assessments, processing manifest...", 20)
         # Store assessments by their file path for later use
         with zipfile.ZipFile(cartridge_path, 'r') as zf:
             # Parse the manifest to get organization and resources
             self._parse_manifest_from_zip(zf)
             
+            self._report_progress("Extracting organization hierarchy...", 30)
             # Extract the organization hierarchy
             organization = self._extract_organization_from_zip(zf)
             
+            self._report_progress("Creating assessment mapping...", 40)
             # Create a mapping of assessments by their XML file path
             self._create_assessment_mapping(zf, assessments)
             
+            self._report_progress("Creating directory structure and converting files...", 50)
             # Create the directory structure
             self._create_directory_structure(organization, output_dir, zf, assessments)
             
+            self._report_progress("Copying loose files...", 80)
             # Copy unreferenced resources to loose files directory
             self._copy_loose_files(output_dir, zf, loose_files)
+            
+            self._report_progress("Creating root index.html...", 90)
+            # Create root index.html
+            self._create_root_index_html(output_dir)
+            
+        self._report_progress("Conversion completed successfully!", 100)
     
     def _parse_manifest_from_zip(self, zf: zipfile.ZipFile) -> None:
         """Parse the imsmanifest.xml file from the zip to extract organization and resources."""
@@ -322,6 +347,44 @@ class EnhancedConverter:
             '        .docx-links { margin-left: 20px; font-size: 0.9em; }',
             '        .docx-links a { color: #666; }',
             '    </style>',
+            '    <script>',
+            '        // Function to handle file clicks',
+            '        function handleFileClick(event) {',
+            '            const link = event.target.closest("a");',
+            '            if (!link) return;',
+            '            ',
+            '            const href = link.getAttribute("href");',
+            '            if (!href) return;',
+            '            ',
+            '            // Check if it\'s a DOCX file',
+            '            if (href.toLowerCase().endsWith(".docx")) {',
+            '                event.preventDefault();',
+            '                ',
+            '                // Try to open with Word using file protocol',
+            '                const fullPath = "file://" + window.location.pathname.replace("/index.html", "") + "/" + href;',
+            '                ',
+            '                // Create a temporary link to trigger file open',
+            '                const tempLink = document.createElement("a");',
+            '                tempLink.href = fullPath;',
+            '                tempLink.style.display = "none";',
+            '                document.body.appendChild(tempLink);',
+            '                tempLink.click();',
+            '                document.body.removeChild(tempLink);',
+            '                ',
+            '                // Also try to open with Word directly',
+            '                try {',
+            '                    window.open(fullPath, "_blank");',
+            '                } catch (e) {',
+            '                    console.log("Could not open file directly:", e);',
+            '                }',
+            '            }',
+            '        }',
+            '        ',
+            '        // Add click event listener to the document',
+            '        document.addEventListener("DOMContentLoaded", function() {',
+            '            document.addEventListener("click", handleFileClick);',
+            '        });',
+            '    </script>',
             '</head>',
             '<body>',
             f'    <h1>{html.escape(item.title)}</h1>'
@@ -469,4 +532,64 @@ class EnhancedConverter:
                         self.assessments_by_file[xml_file] = assessment
                         break
                 except Exception:
-                    continue 
+                    continue
+    
+    def _create_root_index_html(self, output_dir: Path) -> None:
+        """Create a root index.html file that links to all cartridge index.html files."""
+        # Find all index.html files in subdirectories
+        index_files = []
+        for subdir in output_dir.iterdir():
+            if subdir.is_dir():
+                index_path = subdir / "index.html"
+                if index_path.exists():
+                    index_files.append((subdir.name, index_path))
+        
+        if not index_files:
+            self._report_progress("No index.html files found in subdirectories")
+            return
+        
+        # Sort by directory name for consistent ordering
+        index_files.sort(key=lambda x: x[0])
+        
+        # Generate HTML content
+        html_content = [
+            '<!DOCTYPE html>',
+            '<html lang="en">',
+            '<head>',
+            '    <meta charset="UTF-8">',
+            '    <meta name="viewport" content="width=device-width, initial-scale=1.0">',
+            '    <title>Common Cartridge Index</title>',
+            '    <style>',
+            '        body { font-family: Arial, sans-serif; margin: 40px; }',
+            '        h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }',
+            '        .cartridge { margin: 15px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #f9f9f9; }',
+            '        .cartridge a { text-decoration: none; color: #0066cc; font-size: 16px; font-weight: bold; }',
+            '        .cartridge a:hover { text-decoration: underline; }',
+            '        .cartridge-name { color: #666; font-size: 14px; margin-top: 5px; }',
+            '    </style>',
+            '</head>',
+            '<body>',
+            '    <h1>Common Cartridge Index</h1>',
+            '    <p>Click on any cartridge below to view its contents:</p>',
+            '    <div class="content">'
+        ]
+        
+        for dir_name, index_path in index_files:
+            relative_path = index_path.relative_to(output_dir)
+            html_content.append('        <div class="cartridge">')
+            html_content.append(f'            <a href="{html.escape(str(relative_path))}">{html.escape(dir_name)}</a>')
+            html_content.append(f'            <div class="cartridge-name">{html.escape(dir_name)}</div>')
+            html_content.append('        </div>')
+        
+        html_content.extend([
+            '    </div>',
+            '</body>',
+            '</html>'
+        ])
+        
+        # Write the index.html file
+        index_path = output_dir / "index.html"
+        with open(index_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(html_content))
+        
+        self._report_progress(f"Created root index.html with {len(index_files)} cartridge links") 
