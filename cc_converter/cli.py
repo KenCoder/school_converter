@@ -1,13 +1,14 @@
 import argparse
 import sys
-import glob
 import zipfile
 import shutil
+import html
 from pathlib import Path
 from typing import Dict, Optional, List
 
 from cc_converter.xml_parser import parse_extracted_file, ParserError
-from cc_converter.docx_converter import convert_cartridge_to_docx, convert_assessment_to_docx
+from cc_converter.docx_converter import convert_assessment_to_docx
+from cc_converter.enhanced_converter import EnhancedConverter
 
 
 def parse_args(argv=None):
@@ -17,11 +18,11 @@ def parse_args(argv=None):
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
     # Convert command
-    convert_parser = subparsers.add_parser('convert', help='Convert cartridge files to docx')
+    convert_parser = subparsers.add_parser('convert', help='Convert cartridge files to hierarchical structure with DOCX files')
     convert_parser.add_argument(
         "input", 
         type=str,
-        help="Path to .imscc file(s) or extracted XML file(s). Can use wildcards (e.g., *.imscc)"
+        help="Path to .imscc file(s) or extracted XML file(s), or directory containing .imscc files"
     )
     convert_parser.add_argument(
         "output", 
@@ -42,7 +43,7 @@ def parse_args(argv=None):
     unpack_parser.add_argument(
         "input",
         type=str,
-        help="Path to .imscc file(s). Can use wildcards (e.g., *.imscc)"
+        help="Path to .imscc file(s) or directory containing .imscc files"
     )
     unpack_parser.add_argument(
         "output",
@@ -73,21 +74,23 @@ def unpack_cartridge(input_path: Path, output_path: Path) -> None:
 
 
 def process_single_file(input_path: Path, output_path: Path, font_mapping: Optional[Dict], limit: Optional[int]) -> None:
-    """Process a single input file and convert it to docx."""
+    """Process a single input file and convert it to hierarchical structure with DOCX files."""
     if input_path.suffix.lower() == '.imscc':
-        # Process cartridge file
+        # Process cartridge file using enhanced converter
         try:
             # Create a subdirectory for this cartridge
             cartridge_output = output_path / input_path.stem
             cartridge_output.mkdir(parents=True, exist_ok=True)
             
-            num_files = convert_cartridge_to_docx(input_path, cartridge_output, font_mapping, limit)
-            print(f"Created {num_files} docx files in {cartridge_output}")
+            # Use the enhanced converter
+            converter = EnhancedConverter(font_mapping)
+            converter.convert_cartridge(input_path, cartridge_output, limit)
+            print(f"Created hierarchical structure with DOCX files in {cartridge_output}")
         except Exception as e:
             print(f"Error processing cartridge {input_path}: {str(e)}", file=sys.stderr)
             sys.exit(1)
     else:
-        # Process single XML file
+        # Process single XML file (legacy support)
         try:
             # Parse the XML file
             assessment = parse_extracted_file(str(input_path), font_mapping)
@@ -111,6 +114,67 @@ def process_single_file(input_path: Path, output_path: Path, font_mapping: Optio
             sys.exit(1)
 
 
+def create_root_index_html(output_path: Path) -> None:
+    """Create a root index.html file that links to all cartridge index.html files."""
+    # Find all index.html files in subdirectories
+    index_files = []
+    for subdir in output_path.iterdir():
+        if subdir.is_dir():
+            index_path = subdir / "index.html"
+            if index_path.exists():
+                index_files.append((subdir.name, index_path))
+    
+    if not index_files:
+        print("No index.html files found in subdirectories")
+        return
+    
+    # Sort by directory name for consistent ordering
+    index_files.sort(key=lambda x: x[0])
+    
+    # Generate HTML content
+    html_content = [
+        '<!DOCTYPE html>',
+        '<html lang="en">',
+        '<head>',
+        '    <meta charset="UTF-8">',
+        '    <meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        '    <title>Common Cartridge Index</title>',
+        '    <style>',
+        '        body { font-family: Arial, sans-serif; margin: 40px; }',
+        '        h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }',
+        '        .cartridge { margin: 15px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #f9f9f9; }',
+        '        .cartridge a { text-decoration: none; color: #0066cc; font-size: 16px; font-weight: bold; }',
+        '        .cartridge a:hover { text-decoration: underline; }',
+        '        .cartridge-name { color: #666; font-size: 14px; margin-top: 5px; }',
+        '    </style>',
+        '</head>',
+        '<body>',
+        '    <h1>Common Cartridge Index</h1>',
+        '    <p>Click on any cartridge below to view its contents:</p>',
+        '    <div class="content">'
+    ]
+    
+    for dir_name, index_path in index_files:
+        relative_path = index_path.relative_to(output_path)
+        html_content.append('        <div class="cartridge">')
+        html_content.append(f'            <a href="{html.escape(str(relative_path))}">{html.escape(dir_name)}</a>')
+        html_content.append(f'            <div class="cartridge-name">{html.escape(dir_name)}</div>')
+        html_content.append('        </div>')
+    
+    html_content.extend([
+        '    </div>',
+        '</body>',
+        '</html>'
+    ])
+    
+    # Write the index.html file
+    index_path = output_path / "index.html"
+    with open(index_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(html_content))
+    
+    print(f"Created root index.html with {len(index_files)} cartridge links")
+
+
 def main(argv=None):
     args = parse_args(argv)
     
@@ -120,7 +184,7 @@ def main(argv=None):
     
     if args.command == 'convert':
         # Handle convert command
-        input_pattern = args.input
+        input_path = Path(args.input)
         output_path = args.output
         font_mapping = None
         limit = args.limit
@@ -135,11 +199,20 @@ def main(argv=None):
                 print(f"Error loading font mapping: {str(e)}", file=sys.stderr)
                 sys.exit(1)
 
-        # Expand wildcards and get list of input files
-        input_files = [Path(f) for f in glob.glob(input_pattern)]
+        # Determine input files
+        input_files = []
+        if input_path.is_dir():
+            # If input is a directory, find all .imscc and .xml files
+            input_files = list(input_path.glob("*.imscc")) + list(input_path.glob("*.xml"))
+        elif input_path.is_file():
+            # If input is a single file
+            input_files = [input_path]
+        else:
+            print(f"Input path not found: {input_path}", file=sys.stderr)
+            sys.exit(1)
         
         if not input_files:
-            print(f"No files found matching pattern: {input_pattern}", file=sys.stderr)
+            print(f"No .imscc or .xml files found in: {input_path}", file=sys.stderr)
             sys.exit(1)
 
         # Create base output directory
@@ -151,24 +224,36 @@ def main(argv=None):
                 print(f"Input file not found: {input_file}", file=sys.stderr)
                 continue
             process_single_file(input_file, output_path, font_mapping, limit)
+        
+        # Create root index.html
+        create_root_index_html(output_path)
     
     elif args.command == 'unpack':
         # Handle unpack command
-        input_pattern = args.input
+        input_path = Path(args.input)
         output_path = args.output
         
-        # Expand wildcards and get list of input files
-        input_files = [Path(f) for f in glob.glob(input_pattern)]
+        # Determine input files
+        input_files = []
+        if input_path.is_dir():
+            # If input is a directory, find all .imscc files
+            input_files = list(input_path.glob("*.imscc"))
+        elif input_path.is_file():
+            # If input is a single file
+            input_files = [input_path]
+        else:
+            print(f"Input path not found: {input_path}", file=sys.stderr)
+            sys.exit(1)
         
         if not input_files:
-            print(f"No files found matching pattern: {input_pattern}", file=sys.stderr)
+            print(f"No .imscc files found in: {input_path}", file=sys.stderr)
             sys.exit(1)
         
         # Filter to only .imscc files
         imscc_files = [f for f in input_files if f.suffix.lower() == '.imscc']
         
         if not imscc_files:
-            print(f"No .imscc files found matching pattern: {input_pattern}", file=sys.stderr)
+            print(f"No .imscc files found in: {input_path}", file=sys.stderr)
             sys.exit(1)
         
         # Create base output directory
@@ -180,6 +265,9 @@ def main(argv=None):
                 print(f"Input file not found: {input_file}", file=sys.stderr)
                 continue
             unpack_cartridge(input_file, output_path)
+        
+        # Create root index.html
+        create_root_index_html(output_path)
 
 
 if __name__ == '__main__':

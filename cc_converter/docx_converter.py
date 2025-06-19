@@ -262,6 +262,7 @@ def convert_assessment_to_docx(
         template_path: Optional path to a template docx file. If not provided,
             will use the default template in the package.
     """
+    print(f"Converting {output_path}")
     output_path = Path(output_path)
     if template_path:
         template_path = Path(template_path)
