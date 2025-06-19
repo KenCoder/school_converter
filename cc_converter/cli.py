@@ -1,6 +1,8 @@
 import argparse
 import sys
 import glob
+import zipfile
+import shutil
 from pathlib import Path
 from typing import Dict, Optional, List
 
@@ -10,28 +12,64 @@ from cc_converter.docx_converter import convert_cartridge_to_docx, convert_asses
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Convert 1EdTech Common Cartridge files to docx files"
+        description="Convert and unpack 1EdTech Common Cartridge files"
     )
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Convert command
+    convert_parser = subparsers.add_parser('convert', help='Convert cartridge files to docx')
+    convert_parser.add_argument(
         "input", 
-        type=str,  # Changed from Path to str to handle wildcards
+        type=str,
         help="Path to .imscc file(s) or extracted XML file(s). Can use wildcards (e.g., *.imscc)"
     )
-    parser.add_argument(
+    convert_parser.add_argument(
         "output", 
         type=Path, 
         help="Base directory to write output documents. Each input file will create its own subdirectory", 
         nargs="?", 
         default=Path("docs")
     )
-    parser.add_argument(
+    convert_parser.add_argument(
         "--font-map", type=str, help="Path to JSON file with font mapping", default=None
     )
-    parser.add_argument(
+    convert_parser.add_argument(
         "--limit", type=int, help="Maximum number of assessments to process", default=None
+    )
+    
+    # Unpack command
+    unpack_parser = subparsers.add_parser('unpack', help='Unpack cartridge files to directories')
+    unpack_parser.add_argument(
+        "input",
+        type=str,
+        help="Path to .imscc file(s). Can use wildcards (e.g., *.imscc)"
+    )
+    unpack_parser.add_argument(
+        "output",
+        type=Path,
+        help="Base directory to write unpacked files. Each cartridge will create its own subdirectory",
+        nargs="?",
+        default=Path("unpacked")
     )
 
     return parser.parse_args(argv)
+
+
+def unpack_cartridge(input_path: Path, output_path: Path) -> None:
+    """Unpack a single cartridge file to a directory."""
+    try:
+        # Create output directory named after the cartridge
+        cartridge_output = output_path / input_path.stem
+        cartridge_output.mkdir(parents=True, exist_ok=True)
+        
+        # Extract all files from the cartridge
+        with zipfile.ZipFile(input_path, 'r') as zf:
+            zf.extractall(cartridge_output)
+        
+        print(f"Unpacked {input_path} to {cartridge_output}")
+    except Exception as e:
+        print(f"Error unpacking cartridge {input_path}: {str(e)}", file=sys.stderr)
+        sys.exit(1)
 
 
 def process_single_file(input_path: Path, output_path: Path, font_mapping: Optional[Dict], limit: Optional[int]) -> None:
@@ -75,37 +113,73 @@ def process_single_file(input_path: Path, output_path: Path, font_mapping: Optio
 
 def main(argv=None):
     args = parse_args(argv)
-    input_pattern = args.input
-    output_path = args.output
-    font_mapping = None
-    limit = args.limit
+    
+    if not args.command:
+        print("Error: No command specified. Use 'convert' or 'unpack'.", file=sys.stderr)
+        sys.exit(1)
+    
+    if args.command == 'convert':
+        # Handle convert command
+        input_pattern = args.input
+        output_path = args.output
+        font_mapping = None
+        limit = args.limit
 
-    # Load font mapping if provided
-    if args.font_map:
-        try:
-            import json
-            with open(args.font_map, 'r') as f:
-                font_mapping = json.load(f)
-        except Exception as e:
-            print(f"Error loading font mapping: {str(e)}", file=sys.stderr)
+        # Load font mapping if provided
+        if args.font_map:
+            try:
+                import json
+                with open(args.font_map, 'r') as f:
+                    font_mapping = json.load(f)
+            except Exception as e:
+                print(f"Error loading font mapping: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+
+        # Expand wildcards and get list of input files
+        input_files = [Path(f) for f in glob.glob(input_pattern)]
+        
+        if not input_files:
+            print(f"No files found matching pattern: {input_pattern}", file=sys.stderr)
             sys.exit(1)
 
-    # Expand wildcards and get list of input files
-    input_files = [Path(f) for f in glob.glob(input_pattern)]
+        # Create base output directory
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Process each input file
+        for input_file in input_files:
+            if not input_file.exists():
+                print(f"Input file not found: {input_file}", file=sys.stderr)
+                continue
+            process_single_file(input_file, output_path, font_mapping, limit)
     
-    if not input_files:
-        print(f"No files found matching pattern: {input_pattern}", file=sys.stderr)
-        sys.exit(1)
-
-    # Create base output directory
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    # Process each input file
-    for input_file in input_files:
-        if not input_file.exists():
-            print(f"Input file not found: {input_file}", file=sys.stderr)
-            continue
-        process_single_file(input_file, output_path, font_mapping, limit)
+    elif args.command == 'unpack':
+        # Handle unpack command
+        input_pattern = args.input
+        output_path = args.output
+        
+        # Expand wildcards and get list of input files
+        input_files = [Path(f) for f in glob.glob(input_pattern)]
+        
+        if not input_files:
+            print(f"No files found matching pattern: {input_pattern}", file=sys.stderr)
+            sys.exit(1)
+        
+        # Filter to only .imscc files
+        imscc_files = [f for f in input_files if f.suffix.lower() == '.imscc']
+        
+        if not imscc_files:
+            print(f"No .imscc files found matching pattern: {input_pattern}", file=sys.stderr)
+            sys.exit(1)
+        
+        # Create base output directory
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Unpack each cartridge file
+        for input_file in imscc_files:
+            if not input_file.exists():
+                print(f"Input file not found: {input_file}", file=sys.stderr)
+                continue
+            unpack_cartridge(input_file, output_path)
 
 
 if __name__ == '__main__':

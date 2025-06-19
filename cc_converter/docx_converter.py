@@ -57,7 +57,7 @@ class DocxConverter:
                 question_para = doc.add_paragraph(style=style_name)
                 
                 # Add question text with prefix for multiple choice
-                if item.question_type == QuestionType.MULTIPLE_CHOICE:
+                if item.question_type == QuestionType.MULTIPLE_CHOICE or item.question_type == QuestionType.TRUE_FALSE:
                     
                     if is_answer_key:
                         # Find index where ident is correct response
@@ -314,7 +314,7 @@ def convert_cartridge_to_docx(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse the cartridge
-    assessments = parse_cartridge(cartridge_path, font_mapping, limit)
+    assessments, loose_files = parse_cartridge(cartridge_path, font_mapping, limit)
 
     # Convert each assessment
     with zipfile.ZipFile(cartridge_path, 'r') as zf:
@@ -327,5 +327,12 @@ def convert_cartridge_to_docx(
             convert_assessment_to_docx(assessment, output_dir / f"{filename}.docx", zf, font_mapping, is_answer_key=False, template_path=template_path)
             convert_assessment_to_docx(assessment, output_dir / f"{filename}_key.docx", zf, font_mapping, is_answer_key=True, template_path=template_path)
 
+        for file in loose_files:
+            target_path = output_dir / "loose_files" / file
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(file) as f:
+                with open(target_path, 'wb') as f2:
+                    f2.write(f.read())
+        
     return len(assessments) 
 

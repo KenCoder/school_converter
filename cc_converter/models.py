@@ -4,11 +4,9 @@ from enum import Enum
 
 
 class QuestionType(Enum):
+    TRUE_FALSE = "true_false"
     MULTIPLE_CHOICE = "multiple_choice"
     ESSAY = "essay"
-    # We could add more types later
-    # FREE_ANSWER = "free_answer"
-    # Fill in types as needed
 
 
 @dataclass

@@ -5,5 +5,7 @@ venv/
 *.egg-info/
 build/
 dist/
+downloads/
+*.log
 
 

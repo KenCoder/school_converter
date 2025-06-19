@@ -1,3 +1,4 @@
+import sys
 import re
 import zipfile
 import xml.etree.ElementTree as ET
@@ -5,6 +6,7 @@ from html.parser import HTMLParser
 from typing import List, Dict, Any, Tuple, Optional
 import html
 from copy import deepcopy
+import cc_converter
 
 from cc_converter.models import (
     Assessment, Section, Item, ResponseOption, 
@@ -329,7 +331,7 @@ class XMLParser:
         )
         
         # Parse response options for multiple choice
-        if question_type == QuestionType.MULTIPLE_CHOICE:
+        if question_type == QuestionType.MULTIPLE_CHOICE or question_type == QuestionType.TRUE_FALSE:
             self._parse_response_options(item, presentation, item_elem)
         
         return item
@@ -365,6 +367,8 @@ class XMLParser:
         elif "essay" in cc_profile:
             # Support essay question type
             return QuestionType.ESSAY
+        elif "true_false" in cc_profile:
+            return QuestionType.TRUE_FALSE
         
         # For unsupported types, use ESSAY as a fallback
         print(f"Unsupported question type: {cc_profile}, treating as essay")
@@ -419,11 +423,12 @@ class XMLParser:
                     break
 
 
-def parse_cartridge(cartridge_path: str, font_mapping: Optional[Dict[str, str]] = None, limit: Optional[int] = None) -> List[Assessment]:
+def parse_cartridge(cartridge_path: str, font_mapping: Optional[Dict[str, str]] = None, limit: Optional[int] = None) -> Tuple[List[Assessment], List[str]]:
     """Parse a Common Cartridge file into a list of Assessment objects."""
     assessments = []
+    loose_files = []
     parser = XMLParser(font_mapping)
-    
+    print(f"Reading {cartridge_path}")
     with zipfile.ZipFile(cartridge_path, "r") as zf:
         with zf.open("imsmanifest.xml") as manifest_file:
             tree = ET.parse(manifest_file)
@@ -445,15 +450,21 @@ def parse_cartridge(cartridge_path: str, font_mapping: Optional[Dict[str, str]] 
                 continue
             
             try:
-                with zf.open(href) as f:
-                    xml_text = f.read().decode("utf-8")
-                
-                assessment = parser.parse_assessment_xml(xml_text)
-                assessments.append(assessment)
+                if href.endswith('.xml'):
+                    with zf.open(href) as f:
+                        xml_text = f.read().decode("utf-8")
+                    
+                    assessment = parser.parse_assessment_xml(xml_text)
+                    assessments.append(assessment)
+                elif href.lower().endswith('.jpg') or href.lower().endswith('.png'):
+                    pass
+                else:
+                    loose_files.append(href)
+                    # print(f"  Skipping non-xml resource {href}")
             except Exception as e:
-                print(f"Error parsing resource {href}: {str(e)}")
+                print(f"  Error parsing resource {href}: {str(e)}")
     
-    return assessments
+    return assessments, loose_files
 
 
 def parse_extracted_file(file_path: str, font_mapping: Optional[Dict[str, str]] = None) -> Assessment:
