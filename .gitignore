@@ -7,5 +7,6 @@ build/
 dist/
 downloads/
 *.log
-
-
+converted/
+unpacked/
+venv_win/

@@ -10,6 +10,7 @@ A user-friendly graphical interface for converting Schoology Common Cartridge fi
 - **Document Browsing**: Browse converted documents through a web interface
 - **Word Integration**: DOCX files automatically open in Microsoft Word
 - **Existing Folder Support**: Open previously converted folders
+- **Template Support**: Use custom DOCX templates for consistent formatting
 
 ## Installation
 
@@ -36,8 +37,7 @@ cc-gui
 2. **Select Input Folder**: Click "Browse" to select the folder containing your .imscc files
 3. **Select Output Folder**: Choose where to save the converted documents
 4. **Optional Settings**:
-   - Font Mapping File: JSON file for custom font mappings
-   - Maximum Assessments: Limit the number of assessments to process
+   - Template DOCX File: Select a custom DOCX template for consistent formatting
 5. **Start Conversion**: Click "Start Conversion" and monitor progress
 6. **View Results**: Use the "View Converted Site" button to browse documents
 
@@ -82,6 +82,7 @@ The GUI is built using Pywebview, which provides a native desktop application ex
 - Creates a hierarchical web interface for browsing converted documents
 - Uses JavaScript to handle file opening with appropriate applications
 - Provides detailed logging for troubleshooting
+- Supports custom DOCX templates for consistent document formatting
 
 ## Command Line Alternative
 

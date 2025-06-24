@@ -7,7 +7,7 @@ packages = ["cc_converter"]
 
 [project]
 name = "cc_converter"
-description = "Common Cartridge Format Converter"
+description = "Schoology Format Converter"
 version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.7"
@@ -15,6 +15,7 @@ dependencies = [
     "python-docx>=0.8.11",
     "pywebview>=4.0",
     "watchdog>=3.0.0",
+    "requests>=2.25.0",
 ]
 
 [project.scripts]

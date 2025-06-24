@@ -245,27 +245,61 @@ class XMLParser:
         if not root.tag.endswith("questestinterop"):
             raise ParserError(f"Expected questestinterop root element, got {root.tag}")
         
-        # Find assessment element
+        # First try to find assessment element
         assessment_elem = root.find(".//qti:assessment", NS)
-        if assessment_elem is None:
-            raise ParserError("Assessment element not found")
+        if assessment_elem is not None:
+            # Handle regular assessment structure
+            assessment_id = assessment_elem.get("ident", "")
+            assessment_title = assessment_elem.get("title", "Untitled Assessment")
+            
+            # Create assessment
+            assessment = Assessment(
+                ident=assessment_id,
+                title=assessment_title,
+                metadata=self._parse_metadata(assessment_elem)
+            )
+            
+            # Find sections
+            for section_elem in assessment_elem.findall(".//qti:section", NS):
+                section = self._parse_section(section_elem)
+                assessment.sections.append(section)
+            
+            return assessment
         
-        assessment_id = assessment_elem.get("ident", "")
-        assessment_title = assessment_elem.get("title", "Untitled Assessment")
-        
-        # Create assessment
-        assessment = Assessment(
-            ident=assessment_id,
-            title=assessment_title,
-            metadata=self._parse_metadata(assessment_elem)
-        )
-        
-        # Find sections
-        for section_elem in assessment_elem.findall(".//qti:section", NS):
-            section = self._parse_section(section_elem)
+        # If no assessment element found, try to find objectbank element
+        objectbank_elem = root.find(".//qti:objectbank", NS)
+        if objectbank_elem is not None:
+            # Handle objectbank structure (question bank)
+            objectbank_id = objectbank_elem.get("ident", "")
+            objectbank_title = "Question Bank"
+            
+            # Create assessment from objectbank
+            assessment = Assessment(
+                ident=objectbank_id,
+                title=objectbank_title,
+                metadata=self._parse_metadata(objectbank_elem)
+            )
+            
+            # Create a single section for all items in the objectbank
+            section = Section(
+                ident=f"{objectbank_id}_section",
+                metadata={}
+            )
+            
+            # Find all items in the objectbank
+            for item_elem in objectbank_elem.findall("qti:item", NS):
+                try:
+                    item = self._parse_item(item_elem)
+                    section.items.append(item)
+                except Exception as e:
+                    # We'll log the error but continue with other items
+                    print(f"Error parsing item {item_elem.get('ident', '')}: {str(e)}")
+            
             assessment.sections.append(section)
+            return assessment
         
-        return assessment
+        # If neither assessment nor objectbank found, raise error
+        raise ParserError("Neither assessment nor objectbank element found")
     
     def _parse_section(self, section_elem: ET.Element) -> Section:
         """Parse a section element."""
@@ -371,8 +405,8 @@ class XMLParser:
             return QuestionType.TRUE_FALSE
         
         # For unsupported types, use ESSAY as a fallback
-        print(f"Unsupported question type: {cc_profile}, treating as essay")
-        return QuestionType.ESSAY
+        print(f"Unsupported question type: {cc_profile}, treating as multiple choice")
+        return QuestionType.MULTIPLE_CHOICE
     
     def _parse_response_options(self, item: Item, presentation: ET.Element, item_elem: ET.Element):
         """Parse response options for a multiple choice item."""
@@ -424,7 +458,7 @@ class XMLParser:
 
 
 def parse_cartridge(cartridge_path: str, font_mapping: Optional[Dict[str, str]] = None, limit: Optional[int] = None) -> Tuple[List[Assessment], List[str]]:
-    """Parse a Common Cartridge file into a list of Assessment objects."""
+    """Parse a Schoology file into a list of Assessment objects."""
     assessments = []
     loose_files = []
     parser = XMLParser(font_mapping)
@@ -447,6 +481,11 @@ def parse_cartridge(cartridge_path: str, font_mapping: Optional[Dict[str, str]] 
             
             href = href_elem.get("href")
             if not href:
+                continue
+            
+            # Check if the file actually exists in the zip before trying to open it
+            if href not in zf.namelist():
+                print(f"  Warning: Resource file {href} referenced in manifest but not found in archive")
                 continue
             
             try:

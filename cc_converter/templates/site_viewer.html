@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Schoology Viewer</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-bottom: 1px solid #34495e;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .breadcrumb {
+            background-color: #ecf0f1;
+            padding: 10px 20px;
+            border-bottom: 1px solid #bdc3c7;
+            font-size: 14px;
+        }
+        .breadcrumb a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        .content {
+            padding: 20px;
+        }
+        .item {
+            margin: 10px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            transition: all 0.2s ease;
+        }
+        .item:hover {
+            border-color: #3498db;
+            box-shadow: 0 2px 5px rgba(52, 152, 219, 0.2);
+        }
+        .item a {
+            text-decoration: none;
+            color: #2c3e50;
+            font-weight: 500;
+        }
+        .item a:hover {
+            color: #3498db;
+        }
+        .folder {
+            background-color: #f8f9fa;
+            border-left: 4px solid #3498db;
+        }
+        .file {
+            background-color: #fff;
+            border-left: 4px solid #27ae60;
+        }
+        .cartridge {
+            background-color: #f0f8ff;
+            border-left: 4px solid #9b59b6;
+        }
+        .file-icon {
+            margin-right: 10px;
+            font-size: 16px;
+        }
+        .file-info {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+        .file-links {
+            margin-top: 8px;
+        }
+        .file-links a {
+            display: inline-block;
+            margin-right: 15px;
+            padding: 4px 8px;
+            background-color: #3498db;
+            color: white;
+            border-radius: 3px;
+            font-size: 12px;
+            text-decoration: none;
+        }
+        .file-links a:hover {
+            background-color: #2980b9;
+        }
+        .file-links a.answer-key {
+            background-color: #e74c3c;
+        }
+        .file-links a.answer-key:hover {
+            background-color: #c0392b;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .error {
+            background-color: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .back-button {
+            background-color: #95a5a6;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .back-button:hover {
+            background-color: #7f8c8d;
+        }
+        .loose-files {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 id="page-title">Schoology Viewer</h1>
+        </div>
+        <div class="breadcrumb" id="breadcrumb">
+            <a href="#" onclick="navigateToRoot()">Home</a>
+        </div>
+        <div class="content" id="content">
+            <div class="loading">Loading hierarchy data...</div>
+        </div>
+    </div>
+
+    <script>
+        let hierarchyData = null;
+        let currentPath = [];
+        let currentNode = null;
+        let isCombinedView = false;
+
+        // Helper function to wait for pywebview to be ready
+        async function waitForPywebview() {
+            if (typeof pywebview !== 'undefined') {
+                return;
+            }
+            
+            return new Promise(resolve => {
+                if (typeof pywebview !== 'undefined') {
+                    resolve();
+                } else {
+                    window.addEventListener('pywebviewready', resolve);
+                }
+            });
+        }
+
+        // Initialize the page
+        async function initializePage() {
+            try {
+                // Wait for pywebview to be ready
+                await waitForPywebview();
+                
+                const result = await pywebview.api.get_hierarchy_data();
+                if (result.success) {
+                    hierarchyData = result.data;
+                    
+                    // Check if this is a combined hierarchy
+                    if (hierarchyData.type === 'combined_cartridges') {
+                        isCombinedView = true;
+                        currentNode = hierarchyData;
+                        renderCombinedView();
+                    } else {
+                        // Single cartridge view
+                        currentNode = hierarchyData;
+                        renderCurrentNode();
+                    }
+                } else {
+                    showError('Failed to load hierarchy data: ' + result.message);
+                }
+            } catch (error) {
+                showError('Failed to load hierarchy data: ' + error.message);
+            }
+        }
+
+        function renderCombinedView() {
+            // Update page title
+            document.getElementById('page-title').textContent = hierarchyData.title || 'Schoology Collection';
+
+            // Update breadcrumb
+            updateBreadcrumb();
+
+            // Render content
+            const contentDiv = document.getElementById('content');
+            contentDiv.innerHTML = '';
+
+            // Render cartridges
+            if (hierarchyData.cartridges && hierarchyData.cartridges.length > 0) {
+                hierarchyData.cartridges.forEach(cartridge => {
+                    const itemDiv = createCartridgeElement(cartridge);
+                    contentDiv.appendChild(itemDiv);
+                });
+            }
+
+            // Add loose files section if available
+            if (hierarchyData.loose_files_path) {
+                const looseFilesDiv = document.createElement('div');
+                looseFilesDiv.className = 'item loose-files';
+                
+                const link = document.createElement('a');
+                link.href = '#';
+                link.textContent = '📁 Shared Loose Files';
+                link.onclick = (e) => {
+                    e.preventDefault();
+                    openLooseFiles();
+                };
+                looseFilesDiv.appendChild(link);
+                
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'file-info';
+                infoDiv.textContent = 'All loose files from all cartridges in this session';
+                looseFilesDiv.appendChild(infoDiv);
+                
+                contentDiv.appendChild(looseFilesDiv);
+            }
+
+            // Show message if no content
+            if ((!hierarchyData.cartridges || hierarchyData.cartridges.length === 0) && !hierarchyData.loose_files_path) {
+                contentDiv.innerHTML += '<p>No cartridges available.</p>';
+            }
+        }
+
+        function createCartridgeElement(cartridge) {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'item cartridge';
+
+            const link = document.createElement('a');
+            link.href = '#';
+            link.textContent = '📦 ' + cartridge.cartridge_name;
+            link.onclick = (e) => {
+                e.preventDefault();
+                navigateToCartridge(cartridge);
+            };
+            itemDiv.appendChild(link);
+
+            return itemDiv;
+        }
+
+        function navigateToCartridge(cartridge) {
+            currentPath.push({
+                id: 'combined',
+                title: hierarchyData.title || 'Schoology Collection',
+                type: 'combined'
+            });
+            currentPath.push({
+                id: cartridge.cartridge_name,
+                title: cartridge.cartridge_name,
+                type: 'cartridge'
+            });
+            currentNode = cartridge.hierarchy;
+            renderCurrentNode();
+        }
+
+        function renderCurrentNode() {
+            if (!currentNode) return;
+
+            // Update page title
+            document.getElementById('page-title').textContent = currentNode.title || 'Schoology Viewer';
+
+            // Update breadcrumb
+            updateBreadcrumb();
+
+            // Render content
+            const contentDiv = document.getElementById('content');
+            contentDiv.innerHTML = '';
+
+            // Add back button if not at root
+            if (currentPath.length > 0) {
+                const backButton = document.createElement('button');
+                backButton.className = 'back-button';
+                backButton.textContent = '← Back';
+                backButton.onclick = goBack;
+                contentDiv.appendChild(backButton);
+            }
+
+            // Render children
+            if (currentNode.children && currentNode.children.length > 0) {
+                currentNode.children.forEach(child => {
+                    const itemDiv = createItemElement(child);
+                    contentDiv.appendChild(itemDiv);
+                });
+            }
+
+            // Render files if this is a file node
+            if (currentNode.files && currentNode.files.length > 0) {
+                const filesSection = document.createElement('div');
+                filesSection.innerHTML = '<h3>Files:</h3>';
+                
+                currentNode.files.forEach(file => {
+                    const fileDiv = createFileElement(file);
+                    filesSection.appendChild(fileDiv);
+                });
+                
+                contentDiv.appendChild(filesSection);
+            }
+
+            // Show message if no content
+            if ((!currentNode.children || currentNode.children.length === 0) && 
+                (!currentNode.files || currentNode.files.length === 0)) {
+                contentDiv.innerHTML += '<p>No content available.</p>';
+            }
+        }
+
+        function createItemElement(item) {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = `item ${item.type}`;
+
+            if (item.type === 'folder') {
+                const link = document.createElement('a');
+                link.href = '#';
+                link.textContent = '📁 ' + item.title;
+                link.onclick = (e) => {
+                    e.preventDefault();
+                    navigateToItem(item);
+                };
+                itemDiv.appendChild(link);
+            } else {
+                const titleDiv = document.createElement('div');
+                titleDiv.innerHTML = '<span class="file-icon">📄</span>' + item.title;
+                itemDiv.appendChild(titleDiv);
+
+                if (item.files && item.files.length > 0) {
+                    const fileLinks = document.createElement('div');
+                    fileLinks.className = 'file-links';
+                    
+                    item.files.forEach(file => {
+                        const fileLink = document.createElement('a');
+                        fileLink.href = '#';
+                        fileLink.textContent = getFileDisplayName(file);
+                        fileLink.onclick = (e) => {
+                            e.preventDefault();
+                            openFile(file.path);
+                        };
+                        if (file.type === 'answer_key') {
+                            fileLink.className = 'answer-key';
+                        }
+                        fileLinks.appendChild(fileLink);
+                    });
+                    
+                    itemDiv.appendChild(fileLinks);
+                }
+            }
+
+            return itemDiv;
+        }
+
+        function createFileElement(file) {
+            const fileDiv = document.createElement('div');
+            fileDiv.className = 'item file';
+            
+            const titleDiv = document.createElement('div');
+            titleDiv.innerHTML = '<span class="file-icon">📄</span>' + getFileDisplayName(file);
+            fileDiv.appendChild(titleDiv);
+
+            const fileLink = document.createElement('a');
+            fileLink.href = '#';
+            fileLink.textContent = 'Open File';
+            fileLink.className = file.type === 'answer_key' ? 'answer-key' : '';
+            fileLink.onclick = (e) => {
+                e.preventDefault();
+                openFile(file.path);
+            };
+            
+            const fileLinks = document.createElement('div');
+            fileLinks.className = 'file-links';
+            fileLinks.appendChild(fileLink);
+            fileDiv.appendChild(fileLinks);
+
+            return fileDiv;
+        }
+
+        function getFileDisplayName(file) {
+            if (file.title) {
+                return file.title;
+            }
+            if (file.type === 'docx') {
+                return 'DOCX Document';
+            }
+            if (file.type === 'answer_key') {
+                return 'Answer Key';
+            }
+            return file.name;
+        }
+
+        function navigateToItem(item) {
+            currentPath.push({
+                id: currentNode.id,
+                title: currentNode.title,
+                type: currentNode.type
+            });
+            currentNode = item;
+            renderCurrentNode();
+        }
+
+        function navigateToRoot() {
+            currentPath = [];
+            if (isCombinedView) {
+                currentNode = hierarchyData;
+                renderCombinedView();
+            } else {
+                currentNode = hierarchyData;
+                renderCurrentNode();
+            }
+        }
+
+        function goBack() {
+            if (currentPath.length > 0) {
+                const parentInfo = currentPath.pop();
+                
+                if (currentPath.length === 0) {
+                    // Back to root
+                    if (isCombinedView) {
+                        currentNode = hierarchyData;
+                        renderCombinedView();
+                    } else {
+                        currentNode = hierarchyData;
+                        renderCurrentNode();
+                    }
+                } else {
+                    // Navigate back through the path
+                    if (isCombinedView) {
+                        currentNode = hierarchyData;
+                        for (let i = 0; i < currentPath.length; i++) {
+                            const pathItem = currentPath[i];
+                            if (pathItem.type === 'cartridge') {
+                                // Find the cartridge
+                                const cartridge = hierarchyData.cartridges.find(c => c.cartridge_name === pathItem.id);
+                                if (cartridge) {
+                                    currentNode = cartridge.hierarchy;
+                                }
+                            } else if (pathItem.type === 'folder') {
+                                currentNode = currentNode.children.find(child => child.id === pathItem.id);
+                            }
+                            if (!currentNode) break;
+                        }
+                    } else {
+                        currentNode = hierarchyData;
+                        for (let i = 0; i < currentPath.length; i++) {
+                            const pathItem = currentPath[i];
+                            currentNode = currentNode.children.find(child => child.id === pathItem.id);
+                            if (!currentNode) break;
+                        }
+                    }
+                    renderCurrentNode();
+                }
+            }
+        }
+
+        function updateBreadcrumb() {
+            const breadcrumbDiv = document.getElementById('breadcrumb');
+            breadcrumbDiv.innerHTML = '<a href="#" onclick="navigateToRoot()">Home</a>';
+            
+            currentPath.forEach((pathItem, index) => {
+                breadcrumbDiv.innerHTML += ' > ';
+                breadcrumbDiv.innerHTML += '<a href="#" onclick="navigateToPath(' + index + ')">' + 
+                    escapeHtml(pathItem.title) + '</a>';
+            });
+        }
+
+        function navigateToPath(index) {
+            // Navigate to the specified path level
+            currentPath = currentPath.slice(0, index + 1);
+            
+            if (currentPath.length === 0) {
+                if (isCombinedView) {
+                    currentNode = hierarchyData;
+                    renderCombinedView();
+                } else {
+                    currentNode = hierarchyData;
+                    renderCurrentNode();
+                }
+            } else {
+                if (isCombinedView) {
+                    currentNode = hierarchyData;
+                    for (let i = 0; i < currentPath.length; i++) {
+                        const pathItem = currentPath[i];
+                        if (pathItem.type === 'cartridge') {
+                            const cartridge = hierarchyData.cartridges.find(c => c.cartridge_name === pathItem.id);
+                            if (cartridge) {
+                                currentNode = cartridge.hierarchy;
+                            }
+                        } else if (pathItem.type === 'folder') {
+                            currentNode = currentNode.children.find(child => child.id === pathItem.id);
+                        }
+                        if (!currentNode) break;
+                    }
+                } else {
+                    currentNode = hierarchyData;
+                    for (let i = 0; i < currentPath.length; i++) {
+                        const pathItem = currentPath[i];
+                        currentNode = currentNode.children.find(child => child.id === pathItem.id);
+                        if (!currentNode) break;
+                    }
+                }
+                renderCurrentNode();
+            }
+        }
+
+        async function openFile(filePath) {
+            try {
+                // Wait for pywebview to be ready
+                await waitForPywebview();
+                
+                // In combined view, we need to prepend the cartridge path
+                let fullFilePath = filePath;
+                if (isCombinedView && currentPath.length > 0) {
+                    // Find the cartridge path from the current navigation
+                    for (let i = 0; i < currentPath.length; i++) {
+                        const pathItem = currentPath[i];
+                        if (pathItem.type === 'cartridge') {
+                            // Prepend the cartridge path to the file path
+                            fullFilePath = pathItem.id + '/' + filePath;
+                            break;
+                        }
+                    }
+                }
+                
+                const result = await pywebview.api.open_file_locally(fullFilePath);
+                if (!result.success) {
+                    alert('Failed to open file: ' + result.message);
+                }
+            } catch (error) {
+                alert('Error opening file: ' + error.message);
+            }
+        }
+
+        async function openLooseFiles() {
+            try {
+                // Wait for pywebview to be ready
+                await waitForPywebview();
+                
+                const result = await pywebview.api.open_file_locally(hierarchyData.loose_files_path);
+                if (!result.success) {
+                    alert('Failed to open loose files directory: ' + result.message);
+                }
+            } catch (error) {
+                alert('Error opening loose files directory: ' + error.message);
+            }
+        }
+
+        function showError(message) {
+            const contentDiv = document.getElementById('content');
+            contentDiv.innerHTML = '<div class="error">' + escapeHtml(message) + '</div>';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initializePage);
+        
+        // Fallback initialization in case DOMContentLoaded already fired
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializePage);
+        } else {
+            // DOM is already loaded, try to initialize immediately
+            setTimeout(initializePage, 100);
+        }
+    </script>
+</body>
+</html> 

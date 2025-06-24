@@ -249,7 +249,9 @@ def convert_assessment_to_docx(
     resource_zip: Optional[Union[str, zipfile.ZipFile]] = None,
     font_mapping: Optional[Dict[str, str]] = None,
     is_answer_key: bool = False,
-    template_path: Optional[Union[str, Path]] = None
+    template_path: Optional[Union[str, Path]] = None,
+    input_xml_path: Optional[Union[str, Path]] = None,
+    output_dir: Optional[Path] = None
 ):
     """Convert an Assessment object to a docx file.
 
@@ -261,11 +263,22 @@ def convert_assessment_to_docx(
         is_answer_key: Whether to generate an answer key version.
         template_path: Optional path to a template docx file. If not provided,
             will use the default template in the package.
+        input_xml_path: Optional path to the source XML file being converted.
+        output_dir: Optional base output directory for relative path logging.
     """
-    print(f"Converting {output_path}")
     output_path = Path(output_path)
     if template_path:
         template_path = Path(template_path)
+    if input_xml_path:
+        input_xml_path = Path(input_xml_path)
+    
+    # Print input and output paths
+    if input_xml_path:
+        if output_dir:
+            rel_output_path = output_path.relative_to(output_dir)
+            print(f"Converting from XML: {input_xml_path} to docx: {rel_output_path}")
+        else:
+            print(f"Converting from XML: {input_xml_path} to docx: {output_path}")
 
     # Create parent directory if it doesn't exist
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,55 +298,4 @@ def convert_assessment_to_docx(
         if zip_to_close:
             zip_to_close.close()
 
-
-def convert_cartridge_to_docx(
-    cartridge_path: Union[str, Path],
-    output_dir: Union[str, Path],
-    font_mapping: Optional[Dict[str, str]] = None,
-    limit: Optional[int] = None,
-    template_path: Optional[Union[str, Path]] = None
-):
-    """Extract assessments from a cartridge and convert them to docx files.
-
-    Args:
-        cartridge_path: Path to the cartridge file.
-        output_dir: Directory where docx files will be saved.
-        font_mapping: An optional mapping from font names in the source to font names in docx.
-        limit: Maximum number of assessments to process (default: all).
-        template_path: Optional path to a template docx file. If not provided,
-            will use the default template in the package.
-    """
-    from cc_converter.xml_parser import parse_cartridge
-
-    # Normalize paths
-    cartridge_path = Path(cartridge_path)
-    output_dir = Path(output_dir)
-    if template_path:
-        template_path = Path(template_path)
-
-    # Create output directory
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Parse the cartridge
-    assessments, loose_files = parse_cartridge(cartridge_path, font_mapping, limit)
-
-    # Convert each assessment
-    with zipfile.ZipFile(cartridge_path, 'r') as zf:
-        for assessment in assessments:
-            # Create a valid filename from the assessment title
-            filename = assessment.title
-            for char in '<>:"/\\|?*':
-                filename = filename.replace(char, '_')
-
-            convert_assessment_to_docx(assessment, output_dir / f"{filename}.docx", zf, font_mapping, is_answer_key=False, template_path=template_path)
-            convert_assessment_to_docx(assessment, output_dir / f"{filename}_key.docx", zf, font_mapping, is_answer_key=True, template_path=template_path)
-
-        for file in loose_files:
-            target_path = output_dir / "loose_files" / file
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(file) as f:
-                with open(target_path, 'wb') as f2:
-                    f2.write(f.read())
-        
-    return len(assessments) 
 

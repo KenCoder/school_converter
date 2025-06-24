@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Launcher script for the Common Cartridge Converter GUI.
+Launcher script for the Schoology Converter GUI.
 """
 
 from cc_converter.gui import main
