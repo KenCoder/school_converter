@@ -9,6 +9,7 @@ A tool to convert 1EdTech Common Cartridge (.imscc) files to DOCX format.
 - Handles multiple choice and essay questions
 - Supports images and other resources
 - Processes entire cartridges or individual XML files
+- **NEW**: GUI application for easy file conversion
 
 ## Installation
 
@@ -18,7 +19,21 @@ pip install cc-converter
 
 ## Usage
 
-### Basic Usage
+### GUI Application (Recommended)
+
+For the easiest experience, use the GUI application:
+
+```bash
+python run_gui.py
+```
+
+The GUI provides:
+- Drag-and-drop file selection
+- Visual progress tracking
+- Preview of converted files
+- Easy access to converted content
+
+### Command Line Interface
 
 Convert a cartridge file to DOCX:
 
@@ -43,9 +58,25 @@ Example with font mapping:
 cc-convert quiz.imscc --font-map fonts.json
 ```
 
-## Creating Executables with PyInstaller
+## Building Executables
 
-To create a standalone executable using PyInstaller:
+### GUI Application Build
+
+The project includes automated builds for the GUI application:
+
+#### Local Build
+```bash
+python build_gui.py
+```
+
+#### GitHub Actions
+- Automatic builds for Windows and macOS on push to main/master
+- Automatic release creation when tags are pushed
+- See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for details
+
+### CLI Application Build
+
+To create a standalone CLI executable using PyInstaller:
 
 1. Install PyInstaller:
    ```bash
