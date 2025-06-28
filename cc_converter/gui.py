@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import threading
+import argparse
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import logging
@@ -11,6 +12,25 @@ import zipfile
 import html
 
 from cc_converter.hierarchy_converter import HierarchyConverter
+
+
+def parse_gui_args():
+    """Parse command line arguments for the GUI."""
+    parser = argparse.ArgumentParser(
+        description="Schoology Converter GUI",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        '--debug', 
+        action='store_true',
+        help='Enable debug mode with devtools'
+    )
+    parser.add_argument(
+        '--no-debug',
+        action='store_true', 
+        help='Disable debug mode (overrides --debug)'
+    )
+    return parser.parse_args()
 
 
 # Utility functions to reduce duplication
@@ -1317,6 +1337,26 @@ def create_html_content():
 
 def main():
     """Main function to start the GUI application."""
+    # Parse command line arguments
+    args = parse_gui_args()
+    
+    # Determine debug mode
+    debug_mode = False
+    
+    # Check if running as built executable (PyInstaller)
+    is_built_executable = getattr(sys, 'frozen', False)
+    
+    # Priority order: --no-debug > --debug > environment variable > default
+    if args.no_debug:
+        debug_mode = False
+    elif args.debug:
+        debug_mode = True
+    elif os.environ.get('CC_CONVERTER_DEBUG', '').lower() in ('true', '1', 'yes'):
+        debug_mode = True
+    else:
+        # Default: enable debug for development, disable for built executables
+        debug_mode = not is_built_executable
+    
     api = ConverterAPI()
     
     # Create the webview window
@@ -1334,8 +1374,8 @@ def main():
     api._window = window
     
     try:
-        # Start the application
-        webview.start(debug=True)
+        # Start the application with determined debug mode
+        webview.start(debug=debug_mode)
     finally:
         # Clean up resources when the application closes
         api.cleanup()

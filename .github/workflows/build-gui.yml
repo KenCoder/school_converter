@@ -62,11 +62,21 @@ jobs:
       run: |
         pyinstaller SchoologyConverter.spec
         
+    - name: Set proper permissions for macOS app
+      run: |
+        chmod +x dist/SchoologyConverter.app/Contents/MacOS/SchoologyConverter
+        chmod -R 755 dist/SchoologyConverter.app
+        
+    - name: Create macOS zip archive
+      run: |
+        cd dist
+        zip -r SchoologyConverter-macOS.zip SchoologyConverter.app
+        
     - name: Upload macOS artifact
       uses: actions/upload-artifact@v4
       with:
         name: SchoologyConverter-macOS
-        path: dist/SchoologyConverter
+        path: dist/SchoologyConverter-macOS.zip
         
   create-release:
     needs: [build-windows, build-macos]
@@ -101,7 +111,7 @@ jobs:
       with:
         files: |
           windows/SchoologyConverter.exe
-          macos/SchoologyConverter
+          macos/SchoologyConverter-macOS.zip
         draft: false
         prerelease: false
       env:

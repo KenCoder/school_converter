@@ -33,6 +33,8 @@ The GUI provides:
 - Preview of converted files
 - Easy access to converted content
 
+**macOS Users**: If you download the built application from GitHub releases, you'll get a `.app` bundle that can be double-clicked. See [GUI_README.md](GUI_README.md) for detailed installation instructions.
+
 ### Command Line Interface
 
 Convert a cartridge file to DOCX:
