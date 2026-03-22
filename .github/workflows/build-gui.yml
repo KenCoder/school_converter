@@ -57,8 +57,62 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller
         pip install -e .
+
+    # Signing + notarization run only on version tags when all Apple secrets are set (see repo Settings → Secrets).
+    - name: Configure Apple signing
+      id: sign_config
+      env:
+        CERT_B64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+      run: |
+        if [ "${{ github.ref_type }}" = "tag" ] && [ -n "$CERT_B64" ] && [ -n "$API_KEY_P8" ] && [ -n "$KEY_ID" ] && [ -n "$ISSUER" ]; then
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Import Developer ID certificate
+      if: steps.sign_config.outputs.enabled == 'true'
+      env:
+        APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      run: |
+        KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+        echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+        echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+        security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security list-keychain -d user -s "$KEYCHAIN_PATH"
+        security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+    - name: Write App Store Connect API key (notarytool)
+      if: steps.sign_config.outputs.enabled == 'true'
+      env:
+        APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      run: |
+        echo "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+        chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+
+    - name: Resolve codesign identity
+      id: ids
+      if: steps.sign_config.outputs.enabled == 'true'
+      run: |
+        IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+        if [ -z "$IDENTITY" ]; then
+          echo "No Developer ID Application identity found in keychain"
+          exit 1
+        fi
+        echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
         
     - name: Build macOS executable
+      env:
+        APPLE_CODESIGN_IDENTITY: ${{ steps.ids.outputs.identity }}
       run: |
         pyinstaller SchoologyConverter.spec
         
@@ -66,11 +120,30 @@ jobs:
       run: |
         chmod +x dist/SchoologyConverter.app/Contents/MacOS/SchoologyConverter
         chmod -R 755 dist/SchoologyConverter.app
+
+    - name: Notarize and staple
+      if: steps.sign_config.outputs.enabled == 'true'
+      env:
+        KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+      run: |
+        ditto -c -k --keepParent "dist/SchoologyConverter.app" "dist/notarize-submission.zip"
+        xcrun notarytool submit "dist/notarize-submission.zip" \
+          --key "$RUNNER_TEMP/AuthKey.p8" \
+          --key-id "$KEY_ID" \
+          --issuer "$ISSUER" \
+          --wait
+        xcrun stapler staple "dist/SchoologyConverter.app"
+        rm -f dist/notarize-submission.zip
         
     - name: Create macOS zip archive
       run: |
         cd dist
-        zip -r SchoologyConverter-macOS.zip SchoologyConverter.app
+        if [ "${{ steps.sign_config.outputs.enabled }}" = "true" ]; then
+          ditto -c -k --keepParent SchoologyConverter.app SchoologyConverter-macOS.zip
+        else
+          zip -r SchoologyConverter-macOS.zip SchoologyConverter.app
+        fi
         
     - name: Upload macOS artifact
       uses: actions/upload-artifact@v4

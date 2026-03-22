@@ -1,6 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
 block_cipher = None
+
+_spec_dir = os.path.dirname(os.path.abspath(SPEC))
+_codesign_identity = os.environ.get("APPLE_CODESIGN_IDENTITY") or None
+_entitlements_file = (
+    os.path.join(_spec_dir, "packaging/macos/entitlements.plist")
+    if _codesign_identity
+    else None
+)
+# UPX-packed binaries break codesign / notarization; disable when using Developer ID.
+_use_upx = not bool(_codesign_identity)
 
 a = Analysis(
     ['run_gui.py'],
@@ -64,15 +76,15 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=_use_upx,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=True,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    codesign_identity=_codesign_identity,
+    entitlements_file=_entitlements_file,
 )
 
 # For macOS, create a proper .app bundle
@@ -80,11 +92,11 @@ app = BUNDLE(
     exe,
     name='SchoologyConverter.app',
     icon=None,
-    bundle_identifier='com.schoology.converter',
+    bundle_identifier='io.github.kencoder.schoologyconverter',
     info_plist={
         'CFBundleName': 'Schoology Converter',
         'CFBundleDisplayName': 'Schoology Converter',
-        'CFBundleIdentifier': 'com.schoology.converter',
+        'CFBundleIdentifier': 'io.github.kencoder.schoologyconverter',
         'CFBundleVersion': '1.0.0',
         'CFBundleShortVersionString': '1.0.0',
         'CFBundlePackageType': 'APPL',
