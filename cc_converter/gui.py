@@ -233,6 +233,39 @@ class ConverterAPI:
     def select_folder(self) -> Dict[str, Any]:
         """Open folder selection dialog and return selected path."""
         return self._select_folder_helper('input_path')
+
+    def select_cartridge_file(self) -> Dict[str, Any]:
+        """Open file selection dialog for a single .imscc cartridge."""
+        try:
+            default_dir = ""
+            if "input_path" in self.saved_paths:
+                p = Path(self.saved_paths["input_path"])
+                if p.is_file():
+                    default_dir = str(p.parent)
+                elif p.is_dir():
+                    default_dir = str(p)
+
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                directory=default_dir,
+                allow_multiple=False,
+                file_types=("Common Cartridge (*.imscc)",),
+            )
+            if result:
+                selected_path = result[0]
+                self.saved_paths["input_path"] = selected_path
+                cartridge = Path(selected_path)
+                default_output = str(cartridge.parent / cartridge.stem)
+                self.saved_paths["output_path"] = default_output
+                self._save_paths()
+                return create_success_response(
+                    "Cartridge selected",
+                    path=selected_path,
+                    output_path=default_output,
+                )
+            return create_error_response("No file selected")
+        except Exception as e:
+            return create_error_response(str(e))
     
     def select_output_folder(self) -> Dict[str, Any]:
         """Open folder selection dialog for output directory."""
@@ -335,14 +368,23 @@ class ConverterAPI:
                 # Set the progress callback for the converter
                 converter.set_progress_callback(self.progress_callback)
                 
-                # Run conversion
-                input_files = list(Path(input_path).glob("*.imscc"))
-                if not input_files:
-                    print("ERROR: No .imscc files found in input directory")
-                    self.progress_callback("No .imscc files found in input directory", -1)
+                # Run conversion (single .imscc file)
+                cartridge_path = Path(input_path)
+                if not cartridge_path.is_file():
+                    print("ERROR: Input must be a Common Cartridge (.imscc) file")
+                    self.progress_callback(
+                        "Please select a Common Cartridge (.imscc) file", -1
+                    )
                     return
-                
-                print(f"Found {len(input_files)} .imscc files to process")
+                if cartridge_path.suffix.lower() != ".imscc":
+                    print("ERROR: Input file must have a .imscc extension")
+                    self.progress_callback(
+                        "Please select a Common Cartridge (.imscc) file", -1
+                    )
+                    return
+
+                input_files = [cartridge_path]
+                print(f"Found {len(input_files)} .imscc file to process")
                 
                 # Create shared loose files directory for all cartridges in this session
                 shared_loose_files_dir = Path(output_path) / "loose_files"
@@ -387,7 +429,8 @@ class ConverterAPI:
                     cartridge_progress = (i / len(input_files)) * 100
                     self.progress_callback(f"Processing {input_file.name}...", cartridge_progress)
                     
-                    cartridge_output = Path(output_path) / input_file.stem
+                    # Output is the folder for this cartridge (name matches file without .imscc)
+                    cartridge_output = Path(output_path)
                     cartridge_output.mkdir(parents=True, exist_ok=True)
                     
                     # Create a custom progress callback that tracks progress across all cartridges
@@ -975,17 +1018,17 @@ def create_html_content():
                     <h2>File Selection</h2>
                     
                     <div class="form-group">
-                        <label for="inputPath">Input Folder (containing .imscc files):</label>
+                        <label for="inputPath">Common Cartridge (.imscc):</label>
                         <div class="input-group">
-                            <input type="text" id="inputPath" placeholder="Select folder containing .imscc files..." readonly>
-                            <button class="btn btn-secondary" onclick="selectInputFolder()">Browse</button>
+                            <input type="text" id="inputPath" placeholder="Select a single .imscc file..." readonly>
+                            <button class="btn btn-secondary" onclick="selectCartridgeFile()">Browse</button>
                         </div>
                     </div>
                     
                     <div class="form-group">
                         <label for="outputPath">Output Folder:</label>
                         <div class="input-group">
-                            <input type="text" id="outputPath" placeholder="Select output folder..." readonly>
+                            <input type="text" id="outputPath" placeholder="Defaults to cartridge name (without .imscc)..." readonly>
                             <button class="btn btn-secondary" onclick="selectOutputFolder()">Browse</button>
                         </div>
                     </div>
@@ -1139,19 +1182,21 @@ def create_html_content():
             document.getElementById('status').style.display = 'none';
         }
         
-        async function selectInputFolder() {
+        async function selectCartridgeFile() {
             try {
-                const result = await pywebview.api.select_folder();
+                const result = await pywebview.api.select_cartridge_file();
                 if (result.success) {
                     document.getElementById('inputPath').value = result.path;
-                    // Save the path immediately
+                    if (result.output_path) {
+                        document.getElementById('outputPath').value = result.output_path;
+                    }
                     await saveCurrentPaths();
                     hideStatus();
                 } else {
                     showStatus(result.message, 'error');
                 }
             } catch (error) {
-                showStatus('Error selecting folder: ' + error.message, 'error');
+                showStatus('Error selecting file: ' + error.message, 'error');
             }
         }
         
@@ -1198,7 +1243,7 @@ def create_html_content():
             const templatePath = document.getElementById('templatePath').value;
             
             if (!inputPath || !outputPath) {
-                showStatus('Please select both input and output folders', 'error');
+                showStatus('Please select a cartridge file and output folder', 'error');
                 return;
             }
             
