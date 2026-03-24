@@ -386,10 +386,6 @@ class HierarchyConverter:
         # Mark this resource as processed
         self.processed_resources.add(item.identifierref)
         
-        # Create a files subdirectory if it doesn't exist
-        files_dir = parent_dir / "files"
-        files_dir.mkdir(exist_ok=True)
-        
         # Create hierarchy node for this resource
         node = HierarchyNode(
             id=item.identifier,
@@ -398,106 +394,388 @@ class HierarchyConverter:
             path=str(parent_dir.relative_to(self.output_dir)) if parent_dir != self.output_dir else ''
         )
         
-        # Copy the resource files and convert XML to DOCX
+        # Route to appropriate handler based on resource type
+        resource_type = resource.type.lower()
+        
+        if 'imswl_xmlv1p' in resource_type:
+            # Web Link - create DOCX with link information
+            self._process_weblink_resource(item, resource, parent_dir, zf, node)
+        elif 'imsqti_xmlv1p' in resource_type or 'assessment' in resource_type:
+            # QTI Assessment - convert to DOCX quiz/test
+            self._process_assessment_resource(item, resource, parent_dir, zf, node)
+        elif resource_type == 'webcontent':
+            # HTML content (pages, assignments) - convert to DOCX
+            self._process_webcontent_resource(item, resource, parent_dir, zf, node)
+        else:
+            # Unknown type - try to process files directly
+            self._process_generic_resource(item, resource, parent_dir, zf, node)
+        
+        return node
+    
+    def _process_weblink_resource(self, item: OrganizationItem, resource: Resource, 
+                                   parent_dir: Path, zf: zipfile.ZipFile, node: HierarchyNode):
+        """Process a web link resource - create DOCX with link information."""
         for file_path in resource.files:
-            # Check if the file actually exists in the zip before trying to copy it
+            if file_path not in zf.namelist():
+                continue
+                
+            try:
+                with zf.open(file_path) as f:
+                    content = f.read().decode('utf-8')
+                    
+                # Parse the web link XML
+                root = ET.fromstring(content)
+                
+                # Extract title and URL - handle various namespace formats
+                link_title = None
+                link_url = None
+                
+                # Find title and url elements regardless of namespace
+                for elem in root.iter():
+                    local_name = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+                    if local_name == 'title' and elem.text:
+                        link_title = elem.text
+                    elif local_name == 'url':
+                        link_url = elem.get('href')
+                
+                if not link_title:
+                    link_title = item.title
+                
+                if link_url:
+                    # Create a DOCX with the link information
+                    sanitized_title = self._sanitize_filename(item.title)
+                    docx_filename = f"{sanitized_title}.docx"
+                    docx_path = parent_dir / docx_filename
+                    
+                    self._create_weblink_docx(link_title, link_url, docx_path)
+                    
+                    # Add file info to hierarchy node
+                    file_info = {
+                        'name': docx_filename,
+                        'path': str(docx_path.relative_to(self.output_dir)),
+                        'type': 'weblink',
+                        'title': link_title,
+                        'url': link_url
+                    }
+                    node.files.append(file_info)
+                    
+                    self._report_progress(f"Processing web link: {link_title}")
+                else:
+                    warning_msg = f"Web link {file_path} has no URL"
+                    self._add_warning('weblink_no_url', warning_msg, file_path)
+                    
+            except Exception as e:
+                error_msg = f"Could not process web link {file_path}: {e}"
+                self._add_error('weblink_processing', error_msg, file_path)
+    
+    def _process_webcontent_resource(self, item: OrganizationItem, resource: Resource, 
+                                      parent_dir: Path, zf: zipfile.ZipFile, node: HierarchyNode):
+        """Process HTML webcontent - convert to DOCX."""
+        for file_path in resource.files:
+            if file_path not in zf.namelist():
+                continue
+            
+            if not file_path.lower().endswith('.html') and not file_path.lower().endswith('.htm'):
+                # Copy non-HTML files normally (images, etc.)
+                self._copy_file_to_output(file_path, parent_dir, zf, node)
+                continue
+                
+            try:
+                with zf.open(file_path) as f:
+                    html_content = f.read().decode('utf-8')
+                
+                # Create a DOCX from the HTML content
+                sanitized_title = self._sanitize_filename(item.title)
+                docx_filename = f"{sanitized_title}.docx"
+                docx_path = parent_dir / docx_filename
+                
+                self._create_html_docx(item.title, html_content, docx_path, zf)
+                
+                # Add file info to hierarchy node
+                file_info = {
+                    'name': docx_filename,
+                    'path': str(docx_path.relative_to(self.output_dir)),
+                    'type': 'page',
+                    'title': item.title
+                }
+                node.files.append(file_info)
+                
+                self._report_progress(f"Converting page: {item.title}")
+                    
+            except Exception as e:
+                error_msg = f"Could not process HTML content {file_path}: {e}"
+                self._add_error('html_processing', error_msg, file_path)
+    
+    def _process_assessment_resource(self, item: OrganizationItem, resource: Resource, 
+                                       parent_dir: Path, zf: zipfile.ZipFile, node: HierarchyNode):
+        """Process QTI assessment - convert to DOCX quiz/test with answer key."""
+        for file_path in resource.files:
             if file_path not in zf.namelist():
                 warning_msg = f"Resource file {file_path} referenced in manifest but not found in archive"
                 self._add_warning('missing_file', warning_msg, file_path)
                 continue
+            
+            if not file_path.lower().endswith('.xml'):
+                continue
                 
             try:
-                with zf.open(file_path) as source_file:
-                    # Use just the filename, not the full path
-                    dest_path = files_dir / Path(file_path).name
+                # Find the assessment that corresponds to this file
+                assessment = self.assessments_by_file.get(file_path)
+                
+                if assessment:
+                    # Get file size for progress tracking
+                    file_size = 0
+                    try:
+                        file_info = zf.getinfo(file_path)
+                        file_size = file_info.file_size
+                    except Exception:
+                        file_size = 10000  # Default estimate
                     
-                    # Write the file
-                    with open(dest_path, 'wb') as dest_file:
-                        dest_file.write(source_file.read())
+                    # Create regular DOCX - use item title (from organization) or assessment title
+                    title = item.title if item.title else assessment.title
+                    sanitized_title = self._sanitize_filename(title)
+                    docx_filename = f"{sanitized_title}.docx"
+                    docx_path = parent_dir / docx_filename
+                    convert_assessment_to_docx(assessment, docx_path, zf, self.font_mapping, is_answer_key=False, template_path=self.template_path, input_xml_path=file_path, output_dir=self.output_dir)
                     
-                    # If it's an XML file, also convert to DOCX
-                    if file_path.lower().endswith('.xml'):
-                        docx_conversion_successful = False
-                        try:
-                            # Find the assessment that corresponds to this file
-                            assessment = self.assessments_by_file.get(file_path)
-                            
-                            if assessment:
-                                # Get file size for progress tracking
-                                file_size = 0
-                                try:
-                                    file_info = zf.getinfo(file_path)
-                                    file_size = file_info.file_size
-                                except Exception:
-                                    file_size = 10000  # Default estimate
-                                
-                                # Create regular DOCX
-                                # Use assessment title instead of XML filename
-                                sanitized_title = self._sanitize_filename(assessment.title)
-                                docx_filename = f"{sanitized_title}.docx"
-                                docx_path = dest_path.parent / docx_filename
-                                convert_assessment_to_docx(assessment, docx_path, zf, self.font_mapping, is_answer_key=False, template_path=self.template_path, input_xml_path=file_path, output_dir=self.output_dir)
-                                
-                                # Add DOCX file info to hierarchy node
-                                docx_file_info = {
-                                    'name': docx_filename,
-                                    'path': str(docx_path.relative_to(self.output_dir)),
-                                    'type': 'docx',
-                                    'title': assessment.title
-                                }
-                                node.files.append(docx_file_info)
-                                
-                                # Update progress after first DOCX conversion
-                                self.processed_xml_size += file_size / 2
-                                progress = min(100, (self.processed_xml_size / self.total_xml_size) * 100)
-                                self._report_progress(f"Converting {Path(file_path).name} to DOCX...", progress)
-                                
-                                # Create answer key DOCX - use assessment title
-                                key_filename = f"{sanitized_title}_key.docx"
-                                key_path = dest_path.parent / key_filename
-                                convert_assessment_to_docx(assessment, key_path, zf, self.font_mapping, is_answer_key=True, template_path=self.template_path, input_xml_path=file_path, output_dir=self.output_dir)
-                                
-                                # Add answer key file info to hierarchy node
-                                key_file_info = {
-                                    'name': key_filename,
-                                    'path': str(key_path.relative_to(self.output_dir)),
-                                    'type': 'answer_key',
-                                    'title': f"{assessment.title} (Answer Key)"
-                                }
-                                node.files.append(key_file_info)
-                                
-                                # Update progress after second DOCX conversion
-                                self.processed_xml_size += file_size / 2  # Complete progress for this file
-                                progress = min(100, (self.processed_xml_size / self.total_xml_size) * 100)
-                                self._report_progress(f"Converting {Path(file_path).name} to answer key...", progress)
-                                
-                                # Mark DOCX conversion as successful
-                                docx_conversion_successful = True
-                        except Exception as e:
-                            error_msg = f"Could not convert XML file {file_path}: {e}"
-                            self._add_error('docx_conversion', error_msg, file_path)
-                        
-                        # Only add XML file to hierarchy if DOCX conversion failed
-                        if not docx_conversion_successful:
-                            file_info = {
-                                'name': Path(file_path).name,
-                                'path': str(dest_path.relative_to(self.output_dir)),
-                                'type': 'original'
-                            }
-                            node.files.append(file_info)
-                    else:
-                        # For non-XML files, always add to hierarchy
-                        file_info = {
-                            'name': Path(file_path).name,
-                            'path': str(dest_path.relative_to(self.output_dir)),
-                            'type': 'original'
-                        }
-                        node.files.append(file_info)
+                    # Add DOCX file info to hierarchy node
+                    docx_file_info = {
+                        'name': docx_filename,
+                        'path': str(docx_path.relative_to(self.output_dir)),
+                        'type': 'docx',
+                        'title': title
+                    }
+                    node.files.append(docx_file_info)
+                    
+                    # Update progress after first DOCX conversion
+                    self.processed_xml_size += file_size / 2
+                    progress = min(100, (self.processed_xml_size / self.total_xml_size) * 100)
+                    self._report_progress(f"Converting {Path(file_path).name} to DOCX...", progress)
+                    
+                    # Create answer key DOCX
+                    key_filename = f"{sanitized_title}_key.docx"
+                    key_path = parent_dir / key_filename
+                    convert_assessment_to_docx(assessment, key_path, zf, self.font_mapping, is_answer_key=True, template_path=self.template_path, input_xml_path=file_path, output_dir=self.output_dir)
+                    
+                    # Add answer key file info to hierarchy node
+                    key_file_info = {
+                        'name': key_filename,
+                        'path': str(key_path.relative_to(self.output_dir)),
+                        'type': 'answer_key',
+                        'title': f"{title} (Answer Key)"
+                    }
+                    node.files.append(key_file_info)
+                    
+                    # Update progress after second DOCX conversion
+                    self.processed_xml_size += file_size / 2
+                    progress = min(100, (self.processed_xml_size / self.total_xml_size) * 100)
+                    self._report_progress(f"Converting {Path(file_path).name} to answer key...", progress)
+                    
             except Exception as e:
-                error_msg = f"Could not process file {file_path}: {e}"
-                self._add_error('file_processing', error_msg, file_path)
+                error_msg = f"Could not convert assessment {file_path}: {e}"
+                self._add_error('docx_conversion', error_msg, file_path)
+    
+    def _process_generic_resource(self, item: OrganizationItem, resource: Resource, 
+                                   parent_dir: Path, zf: zipfile.ZipFile, node: HierarchyNode):
+        """Process a generic resource - copy files directly."""
+        for file_path in resource.files:
+            if file_path not in zf.namelist():
+                continue
+            
+            # Skip XML files for generic resources
+            if file_path.lower().endswith('.xml'):
+                continue
+                
+            self._copy_file_to_output(file_path, parent_dir, zf, node)
+    
+    def _copy_file_to_output(self, file_path: str, parent_dir: Path, 
+                              zf: zipfile.ZipFile, node: HierarchyNode):
+        """Copy a file from the zip to the output directory."""
+        try:
+            with zf.open(file_path) as source_file:
+                dest_path = parent_dir / Path(file_path).name
+                with open(dest_path, 'wb') as dest_file:
+                    dest_file.write(source_file.read())
+                
+                # Add to hierarchy
+                file_info = {
+                    'name': Path(file_path).name,
+                    'path': str(dest_path.relative_to(self.output_dir)),
+                    'type': 'original'
+                }
+                node.files.append(file_info)
+        except Exception as e:
+            error_msg = f"Could not copy file {file_path}: {e}"
+            self._add_error('file_copy', error_msg, file_path)
+    
+    def _create_weblink_docx(self, title: str, url: str, output_path: Path):
+        """Create a DOCX file for a web link."""
+        try:
+            from docx import Document
+            from docx.shared import Pt
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+        except ImportError:
+            raise ImportError("The 'python-docx' package is required")
         
-        return node
+        # Create document from template
+        template_path = self.template_path or Path(__file__).parent / 'template.docx'
+        doc = Document(template_path)
+        
+        # Add title
+        doc.add_heading(title, level=1)
+        
+        # Add link paragraph
+        p = doc.add_paragraph()
+        p.add_run("Link: ")
+        
+        # Add hyperlink
+        self._add_hyperlink(p, url, url)
+        
+        doc.save(output_path)
+    
+    def _add_hyperlink(self, paragraph, url: str, text: str):
+        """Add a hyperlink to a paragraph."""
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+        from docx.shared import RGBColor
+        
+        # Create the relationship
+        part = paragraph.part
+        r_id = part.relate_to(url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', is_external=True)
+        
+        # Create the hyperlink element
+        hyperlink = OxmlElement('w:hyperlink')
+        hyperlink.set(qn('r:id'), r_id)
+        
+        # Create a run element
+        new_run = OxmlElement('w:r')
+        rPr = OxmlElement('w:rPr')
+        
+        # Style the hyperlink (blue and underlined)
+        color = OxmlElement('w:color')
+        color.set(qn('w:val'), '0000FF')
+        rPr.append(color)
+        
+        u = OxmlElement('w:u')
+        u.set(qn('w:val'), 'single')
+        rPr.append(u)
+        
+        new_run.append(rPr)
+        
+        # Add the text
+        text_elem = OxmlElement('w:t')
+        text_elem.text = text
+        new_run.append(text_elem)
+        
+        hyperlink.append(new_run)
+        paragraph._p.append(hyperlink)
+    
+    def _create_html_docx(self, title: str, html_content: str, output_path: Path, 
+                          zf: zipfile.ZipFile = None):
+        """Create a DOCX file from HTML content."""
+        try:
+            from docx import Document
+            from docx.shared import Pt, RGBColor
+        except ImportError:
+            raise ImportError("The 'python-docx' package is required")
+        
+        import re
+        
+        # Create document from template
+        template_path = self.template_path or Path(__file__).parent / 'template.docx'
+        doc = Document(template_path)
+        
+        # Add title
+        doc.add_heading(title, level=1)
+        
+        # Clean up the HTML and extract text content
+        # Remove hidden inputs and script tags
+        html_content = re.sub(r'<input[^>]*type=["\']hidden["\'][^>]*>', '', html_content, flags=re.IGNORECASE)
+        html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.IGNORECASE | re.DOTALL)
+        html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Parse HTML and add content to document
+        self._parse_html_to_docx(doc, html_content, zf)
+        
+        doc.save(output_path)
+    
+    def _parse_html_to_docx(self, doc, html_content: str, zf: zipfile.ZipFile = None):
+        """Parse HTML content and add it to a docx document."""
+        import re
+        from html import unescape
+        
+        # Handle common block elements
+        # Split by paragraph and div tags
+        blocks = re.split(r'<(?:p|div)[^>]*>|</(?:p|div)>', html_content)
+        
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            
+            # Skip attachment divs with broken links
+            if 'sch-grade-item-attachments' in block:
+                continue
+            
+            # Handle line breaks
+            lines = re.split(r'<br\s*/?>', block)
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Check for images
+                img_matches = re.findall(r'<img[^>]+src=["\']([^"\']+)["\'][^>]*>', line, re.IGNORECASE)
+                
+                # Remove HTML tags and decode entities for text
+                text = re.sub(r'<[^>]+>', '', line)
+                text = unescape(text).strip()
+                
+                if text or img_matches:
+                    p = doc.add_paragraph()
+                    
+                    if text:
+                        # Check for bold text
+                        if '<strong>' in line or '<b>' in line:
+                            run = p.add_run(text)
+                            run.bold = True
+                        else:
+                            p.add_run(text)
+                    
+                    # Add images
+                    for img_src in img_matches:
+                        self._add_image_to_paragraph(p, img_src, zf)
+    
+    def _add_image_to_paragraph(self, paragraph, img_src: str, zf: zipfile.ZipFile = None):
+        """Add an image to a paragraph."""
+        from docx.shared import Inches
+        from io import BytesIO
+        
+        try:
+            if img_src.startswith('http://') or img_src.startswith('https://'):
+                # Download from URL
+                import requests
+                response = requests.get(img_src, timeout=10)
+                response.raise_for_status()
+                run = paragraph.add_run()
+                run.add_picture(BytesIO(response.content), width=Inches(4))
+            elif zf:
+                # Try to find in zip
+                # Handle relative paths
+                if img_src.startswith('../'):
+                    img_src = img_src.replace('../', '')
+                elif img_src.startswith('./'):
+                    img_src = img_src[2:]
+                
+                if img_src in zf.namelist():
+                    with zf.open(img_src) as img_file:
+                        run = paragraph.add_run()
+                        run.add_picture(img_file, width=Inches(4))
+        except Exception as e:
+            # Log but don't fail
+            paragraph.add_run(f" [Image: {img_src}] ")
     
     def _process_container_item(self, item: OrganizationItem, parent_dir: Path, 
                               zf: zipfile.ZipFile, assessments: List[Any]) -> HierarchyNode:
@@ -537,6 +815,10 @@ class HierarchyConverter:
         
         # Copy files that are not referenced by any resource
         for file_path in loose_files:
+            # Skip XML and HTML files - they are converted to DOCX
+            if file_path.lower().endswith('.xml') or file_path.lower().endswith('.html') or file_path.lower().endswith('.htm'):
+                continue
+
             # Check if the file actually exists in the zip before trying to copy it
             if file_path in zf.namelist():
                 try:
@@ -564,6 +846,10 @@ class HierarchyConverter:
             if identifier not in self.referenced_resources and identifier not in self.processed_resources:
                 # This is a truly loose resource
                 for file_path in resource.files:
+                    # Skip XML and HTML files - they are converted to DOCX
+                    if file_path.lower().endswith('.xml') or file_path.lower().endswith('.html') or file_path.lower().endswith('.htm'):
+                        continue
+                        
                     # Check if the file actually exists in the zip before trying to copy it
                     if file_path in zf.namelist():
                         try:

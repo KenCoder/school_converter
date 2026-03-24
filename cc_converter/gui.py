@@ -141,32 +141,11 @@ class LogCapture:
         self.log_file.close()
 
 
-class ConvertedSiteAPI:
-    """Shared API class for converted site windows to eliminate duplication."""
-    
-    def __init__(self, base_dir: Path):
-        self.base_dir = base_dir
-    
-    def open_file_locally(self, file_path: str) -> Dict[str, Any]:
-        """Open a file locally using the operating system's default application."""
-        full_path = self.base_dir / file_path
-        print(f"full_path: {full_path}")
-        return open_file_with_default_app(full_path)
-    
-    def get_hierarchy_data(self) -> Dict[str, Any]:
-        """Get the hierarchy data from the JSON file."""
-        try:
-            hierarchy_path = self.base_dir / "hierarchy.json"
-            with open(hierarchy_path, 'r', encoding='utf-8') as f:
-                return create_success_response("Hierarchy loaded", data=json.load(f))
-        except Exception as e:
-            return create_error_response(f"Failed to load hierarchy: {str(e)}")
-
-
 class ConverterAPI:
     def __init__(self):
         """Initialize the ConverterAPI."""
         self.current_output_dir = None
+        self.current_cartridge_path = None
         self.conversion_status = {"status": "idle", "message": "", "progress": 0}
         self.progress_callback = None
         self.conversion_thread = None
@@ -203,69 +182,45 @@ class ConverterAPI:
         """Get saved paths for the frontend."""
         return {
             "success": True,
-            "input_path": self.saved_paths.get('input_path', ''),
-            "output_path": self.saved_paths.get('output_path', ''),
-            "template_path": self.saved_paths.get('template_path', '')
+            "cartridge_path": self.saved_paths.get('cartridge_path', '')
         }
         
-    def _select_folder_helper(self, path_key: str, dialog_title: str = "Select Folder") -> Dict[str, Any]:
-        """Helper method to select a folder and save the path."""
+    def select_cartridge_file(self) -> Dict[str, Any]:
+        """Open file selection dialog for cartridge file."""
         try:
-            # Use last path as default directory if available
-            default_dir = self.saved_paths.get(path_key, '')
-            
-            result = webview.windows[0].create_file_dialog(
-                webview.FOLDER_DIALOG,
-                directory=default_dir,
-                allow_multiple=False
-            )
-            if result:
-                selected_path = result[0]
-                # Save the selected path
-                self.saved_paths[path_key] = selected_path
-                self._save_paths()
-                return create_success_response("Folder selected", path=selected_path)
-            else:
-                return create_error_response("No folder selected")
-        except Exception as e:
-            return create_error_response(str(e))
-    
-    def select_folder(self) -> Dict[str, Any]:
-        """Open folder selection dialog and return selected path."""
-        return self._select_folder_helper('input_path')
-    
-    def select_output_folder(self) -> Dict[str, Any]:
-        """Open folder selection dialog for output directory."""
-        return self._select_folder_helper('output_path')
-    
-    def select_template_file(self) -> Dict[str, Any]:
-        """Open file selection dialog for template docx file."""
-        try:
-            # Use last template path's directory as default if available
+            # Use last cartridge path's directory as default if available
             default_dir = ''
-            if 'template_path' in self.saved_paths:
-                template_path = Path(self.saved_paths['template_path'])
-                if template_path.exists():
-                    default_dir = str(template_path.parent)
+            if 'cartridge_path' in self.saved_paths:
+                cartridge_path = Path(self.saved_paths['cartridge_path'])
+                if cartridge_path.exists():
+                    default_dir = str(cartridge_path.parent)
             
             result = webview.windows[0].create_file_dialog(
                 webview.OPEN_DIALOG,
                 directory=default_dir,
                 allow_multiple=False,
-                file_types=('Word documents (*.docx)',)
+                file_types=('IMS Common Cartridge (*.imscc)',)
             )
             if result:
                 selected_path = result[0]
                 # Save the selected path
-                self.saved_paths['template_path'] = selected_path
+                self.saved_paths['cartridge_path'] = selected_path
                 self._save_paths()
-                return create_success_response("Template file selected", path=selected_path)
+                
+                # Calculate default output path
+                cartridge = Path(selected_path)
+                default_output = cartridge.parent / cartridge.stem
+                
+                return create_success_response("Cartridge file selected", 
+                                             path=selected_path,
+                                             default_output=str(default_output))
             else:
                 return create_error_response("No file selected")
         except Exception as e:
             return create_error_response(str(e))
     
-    def start_conversion(self, input_path: str, output_path: str, template_path: str = None) -> Dict[str, Any]:
+    
+    def start_conversion(self, cartridge_path: str) -> Dict[str, Any]:
         """Start the conversion process in a background thread."""
         if self.conversion_thread and self.conversion_thread.is_alive():
             return create_error_response("Conversion already in progress")
@@ -273,8 +228,13 @@ class ConverterAPI:
         # Clear previous conversion summary
         self.last_conversion_summary = None
         
+        # Calculate output directory from cartridge path
+        cartridge = Path(cartridge_path)
+        output_path = cartridge.parent / cartridge.stem
+        
         # Setup logging with full stdout/stderr capture
-        self.log_file_path = Path(output_path) / f"conversion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        output_path.mkdir(parents=True, exist_ok=True)
+        self.log_file_path = output_path / f"conversion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         
         # Create log capture context manager
         self.log_capture = LogCapture(self.log_file_path)
@@ -289,7 +249,8 @@ class ConverterAPI:
             ]
         )
         
-        self.current_output_dir = Path(output_path)
+        self.current_output_dir = output_path
+        self.current_cartridge_path = cartridge
         
         # Set up progress callback to update the webview
         def progress_callback(message: str, progress: float = None):
@@ -310,179 +271,78 @@ class ConverterAPI:
         # Start conversion in background thread
         self.conversion_thread = threading.Thread(
             target=self._run_conversion,
-            args=(input_path, output_path, template_path)
+            args=(cartridge_path, str(output_path))
         )
         self.conversion_thread.daemon = True
         self.conversion_thread.start()
         
-        return create_success_response("Conversion started")
+        return create_success_response("Conversion started", output_dir=str(output_path))
     
-    def _run_conversion(self, input_path: str, output_path: str, template_path: str = None):
+    def _run_conversion(self, cartridge_path: str, output_path: str):
         """Run the actual conversion process."""
         try:
             # Use log capture to capture all stdout/stderr
             with self.log_capture:
                 print(f"=== Conversion started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
-                print(f"Input path: {input_path}")
-                print(f"Output path: {output_path}")
-                if template_path:
-                    print(f"Template path: {template_path}")
+                print(f"Cartridge: {cartridge_path}")
+                print(f"Output directory: {output_path}")
                 print("=" * 60)
                 
-                # Create converter and run conversion
-                converter = HierarchyConverter(template_path=Path(template_path) if template_path else None)
+                # Create converter for this cartridge (uses built-in template)
+                converter = HierarchyConverter()
                 
                 # Set the progress callback for the converter
                 converter.set_progress_callback(self.progress_callback)
                 
-                # Run conversion
-                input_files = list(Path(input_path).glob("*.imscc"))
-                if not input_files:
-                    print("ERROR: No .imscc files found in input directory")
-                    self.progress_callback("No .imscc files found in input directory", -1)
-                    return
+                # Convert the cartridge directly into the output directory
+                input_file = Path(cartridge_path)
+                self.progress_callback(f"Converting {input_file.name}...", 0)
                 
-                print(f"Found {len(input_files)} .imscc files to process")
+                # Convert the cartridge
+                converter.convert_cartridge_with_hierarchy(input_file, Path(output_path))
                 
-                # Create shared loose files directory for all cartridges in this session
-                shared_loose_files_dir = Path(output_path) / "loose_files"
-                shared_loose_files_dir.mkdir(exist_ok=True)
-                print(f"Created shared loose files directory: {shared_loose_files_dir}")
-                
-                # Calculate total XML files across all cartridges for progress tracking
-                total_xml_files = 0
-                xml_files_per_cartridge = []
-                
-                for input_file in input_files:
-                    try:
-                        with zipfile.ZipFile(input_file, 'r') as zf:
-                            xml_files = [f for f in zf.namelist() if f.lower().endswith('.xml')]
-                            xml_files_per_cartridge.append(len(xml_files))
-                            total_xml_files += len(xml_files)
-                    except Exception as e:
-                        print(f"Warning: Could not count XML files in {input_file}: {e}")
-                        xml_files_per_cartridge.append(0)
-                
-                print(f"Total XML files to process across all cartridges: {total_xml_files}")
-                
-                # Track progress across all cartridges
-                processed_xml_files = 0
-                
-                # Collect all hierarchy data for combined hierarchy.json
-                all_hierarchies = []
-                
-                # Track overall conversion results
-                total_errors = 0
-                total_warnings = 0
-                total_files_with_errors = 0
-                total_files_with_warnings = 0
-                all_errors = []
-                all_warnings = []
-                hierarchy_creation_errors = []
-                
-                for i, input_file in enumerate(input_files):
-                    print(f"\n--- Processing file {i+1}/{len(input_files)}: {input_file.name} ---")
-                    
-                    # Calculate progress based on completed cartridges and current XML progress
-                    cartridge_progress = (i / len(input_files)) * 100
-                    self.progress_callback(f"Processing {input_file.name}...", cartridge_progress)
-                    
-                    cartridge_output = Path(output_path) / input_file.stem
-                    cartridge_output.mkdir(parents=True, exist_ok=True)
-                    
-                    # Create a custom progress callback that tracks progress across all cartridges
-                    def cross_cartridge_progress_callback(message: str, progress: float = None):
-                        if progress is not None:
-                            # Calculate progress within this cartridge
-                            xml_files_in_this_cartridge = xml_files_per_cartridge[i]
-                            if xml_files_in_this_cartridge > 0:
-                                # Progress within this cartridge (0-100) converted to overall progress
-                                progress_within_cartridge = progress / 100.0
-                                overall_progress = ((i + progress_within_cartridge) / len(input_files)) * 100
-                                self.progress_callback(message, overall_progress)
-                            else:
-                                # No XML files in this cartridge, just show cartridge progress
-                                overall_progress = ((i + 1) / len(input_files)) * 100
-                                self.progress_callback(message, overall_progress)
-                        else:
-                            # Just pass through the message without progress update
-                            self.progress_callback(message, None)
-                    
-                    # Set the cross-cartridge progress callback for this cartridge
-                    converter.set_progress_callback(cross_cartridge_progress_callback)
-                    
-                    # Create converter with shared loose files directory for this cartridge
-                    cartridge_converter = HierarchyConverter(
-                        template_path=Path(template_path) if template_path else None,
-                        shared_loose_files_dir=shared_loose_files_dir
-                    )
-                    cartridge_converter.set_progress_callback(cross_cartridge_progress_callback)
-                    
-                    # Convert the cartridge and get the hierarchy data
-                    hierarchy_data = cartridge_converter.convert_cartridge_with_hierarchy(input_file, cartridge_output)
-                    
-                    # Collect conversion summary for this cartridge
-                    summary = cartridge_converter.get_conversion_summary()
-                    total_errors += summary['total_errors']
-                    total_warnings += summary['total_warnings']
-                    total_files_with_errors += summary['files_with_errors']
-                    total_files_with_warnings += summary['files_with_warnings']
-                    all_errors.extend(summary['errors'])
-                    all_warnings.extend(summary['warnings'])
-                    if summary['hierarchy_creation_error']:
-                        hierarchy_creation_errors.append({
-                            'cartridge': input_file.name,
-                            'error': summary['hierarchy_creation_error']
-                        })
-                    
-                    if hierarchy_data:
-                        all_hierarchies.append({
-                            'cartridge_name': input_file.stem,
-                            'cartridge_path': str(cartridge_output.relative_to(Path(output_path))),
-                            'hierarchy': cartridge_converter._hierarchy_node_to_dict(hierarchy_data)
-                        })
-                    
-                    print(f"Completed processing: {input_file.name}")
-                
-                # Create combined hierarchy.json at the root
-                if all_hierarchies:
-                    self._create_combined_hierarchy_json(Path(output_path), all_hierarchies)
+                # Get conversion summary
+                summary = converter.get_conversion_summary()
                 
                 # Provide final summary to user
-                if total_errors == 0 and len(hierarchy_creation_errors) == 0:
-                    if total_warnings > 0:
-                        final_message = f"Conversion completed with {total_warnings} warnings across {total_files_with_warnings} files!"
+                if summary['success']:
+                    if summary['total_warnings'] > 0:
+                        final_message = f"Conversion completed with {summary['total_warnings']} warnings across {summary['files_with_warnings']} files!"
                         self.progress_callback(final_message, 100)
                     else:
                         final_message = "Conversion completed successfully!"
                         self.progress_callback(final_message, 100)
                 else:
-                    error_message = f"Conversion completed with {total_errors} errors affecting {total_files_with_errors} files"
-                    if total_warnings > 0:
-                        error_message += f" and {total_warnings} warnings"
-                    if hierarchy_creation_errors:
-                        error_message += f" ({len(hierarchy_creation_errors)} hierarchy creation errors)"
+                    error_count = summary['total_errors']
+                    warning_count = summary['total_warnings']
+                    files_with_errors = summary['files_with_errors']
+                    
+                    error_message = f"Conversion completed with {error_count} errors affecting {files_with_errors} files"
+                    if warning_count > 0:
+                        error_message += f" and {warning_count} warnings"
+                    if summary['hierarchy_creation_error']:
+                        error_message += " (hierarchy creation error)"
                     error_message += "!"
                     self.progress_callback(error_message, -1)
                 
                 print(f"\n=== Conversion completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
-                print(f"Total errors: {total_errors}")
-                print(f"Total warnings: {total_warnings}")
-                print(f"Files with errors: {total_files_with_errors}")
-                print(f"Files with warnings: {total_files_with_warnings}")
-                if hierarchy_creation_errors:
-                    print(f"Hierarchy creation errors: {len(hierarchy_creation_errors)}")
+                print(f"Total errors: {summary['total_errors']}")
+                print(f"Total warnings: {summary['total_warnings']}")
+                print(f"Files with errors: {summary['files_with_errors']}")
+                print(f"Files with warnings: {summary['files_with_warnings']}")
+                if summary['hierarchy_creation_error']:
+                    print(f"Hierarchy creation error: {summary['hierarchy_creation_error']}")
                 
                 # Store the conversion summary for UI access
                 self.last_conversion_summary = {
-                    'total_errors': total_errors,
-                    'total_warnings': total_warnings,
-                    'total_files_with_errors': total_files_with_errors,
-                    'total_files_with_warnings': total_files_with_warnings,
-                    'all_errors': all_errors,
-                    'all_warnings': all_warnings,
-                    'hierarchy_creation_errors': hierarchy_creation_errors,
-                    'success': total_errors == 0 and len(hierarchy_creation_errors) == 0,
+                    'total_errors': summary['total_errors'],
+                    'total_warnings': summary['total_warnings'],
+                    'total_files_with_errors': summary['files_with_errors'],
+                    'total_files_with_warnings': summary['files_with_warnings'],
+                    'all_errors': summary['errors'],
+                    'all_warnings': summary['warnings'],
+                    'hierarchy_creation_error': summary['hierarchy_creation_error'],
+                    'success': summary['success'],
                     'timestamp': datetime.now().isoformat()
                 }
                 
@@ -492,22 +352,6 @@ class ConverterAPI:
             logging.error(error_msg)
             if self.progress_callback:
                 self.progress_callback(error_msg, -1)
-    
-    def _create_combined_hierarchy_json(self, output_dir: Path, all_hierarchies: List[Dict[str, Any]]) -> None:
-        """Create a combined hierarchy.json file that includes all cartridges."""
-        combined_hierarchy = {
-            'type': 'combined_cartridges',
-            'title': 'Schoology Collection',
-            'cartridges': all_hierarchies,
-            'loose_files_path': 'loose_files' if (output_dir / 'loose_files').exists() else None
-        }
-        
-        # Write to JSON file
-        json_path = output_dir / "hierarchy.json"
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(combined_hierarchy, f, indent=2, ensure_ascii=False)
-        
-        print(f"Created combined hierarchy.json with {len(all_hierarchies)} cartridges")
     
     def get_conversion_status(self) -> Dict[str, Any]:
         """Get the current status of the conversion process."""
@@ -529,158 +373,38 @@ class ConverterAPI:
         except Exception as e:
             return create_error_response(f"Failed to open log file: {str(e)}")
     
-    def open_converted_site(self) -> Dict[str, Any]:
-        """Open the converted site using hierarchy.json in a new Pywebview window."""
+    def open_output_folder(self) -> Dict[str, Any]:
+        """Open the output folder in the system file explorer."""
         if not self.current_output_dir:
-            return create_error_response("No converted site available")
-        
-        hierarchy_path = self.current_output_dir / "hierarchy.json"
-        if not hierarchy_path.exists():
-            return create_error_response(f"hierarchy.json not found at {hierarchy_path}")
+            return create_error_response("No output folder available")
         
         try:
-            # Create the API instance using the shared class
-            site_api = ConvertedSiteAPI(self.current_output_dir)
+            import subprocess
+            import platform
             
-            # Create dynamic HTML content
-            html_content = self._create_dynamic_site_html()
+            system = platform.system()
             
-            # Create a new window with the dynamic HTML content
-            site_window = create_webview_window(
-                'Converted Schoology Site',
-                html_content,
-                site_api
-            )
+            if system == "Windows":
+                os.startfile(str(self.current_output_dir))
+            elif system == "Darwin":  # macOS
+                subprocess.run(["open", str(self.current_output_dir)], check=True)
+            else:  # Linux
+                subprocess.run(["xdg-open", str(self.current_output_dir)], check=True)
             
-            return create_success_response("Converted site opened in new window")
+            return create_success_response(f"Opened {self.current_output_dir}")
+            
         except Exception as e:
-            return create_error_response(f"Failed to open site: {str(e)}")
-    
-    def open_existing_folder(self) -> Dict[str, Any]:
-        """Open an existing converted folder in a new Pywebview window."""
-        try:
-            result = webview.windows[0].create_file_dialog(
-                webview.FOLDER_DIALOG,
-                directory='',
-                allow_multiple=False
-            )
-            if result:
-                folder_path = Path(result[0])
-                hierarchy_path = folder_path / "hierarchy.json"
-                if hierarchy_path.exists():
-                    # Create the API instance using the shared class
-                    site_api = ConvertedSiteAPI(folder_path)
-                    
-                    # Create dynamic HTML content
-                    html_content = self._create_dynamic_site_html()
-                    
-                    # Create a new window with the dynamic HTML content
-                    site_window = create_webview_window(
-                        'Converted Schoology Site',
-                        html_content,
-                        site_api
-                    )
-                    
-                    return create_success_response("Existing site opened in new window")
-                else:
-                    return create_error_response("No hierarchy.json found in selected folder")
-            else:
-                return create_error_response("No folder selected")
-        except Exception as e:
-            return create_error_response(str(e))
-    
-    def _create_dynamic_site_html(self) -> str:
-        """Create dynamic HTML content that loads hierarchy data and generates views."""
-        try:
-            # Try to load from external template file
-            template_path = Path(__file__).parent / "templates" / "site_viewer.html"
-            if template_path.exists():
-                with open(template_path, 'r', encoding='utf-8') as f:
-                    return f.read()
-            else:
-                # Fallback to inline HTML if template file doesn't exist
-                return self._get_fallback_html()
-        except Exception as e:
-            print(f"Warning: Could not load HTML template: {e}")
-            return self._get_fallback_html()
-    
-    def _get_fallback_html(self) -> str:
-        """Fallback HTML content if template file is not available."""
-        return """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Schoology Viewer</title>
-    <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            margin: 0; 
-            padding: 20px; 
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background-color: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        .header {
-            background-color: #2c3e50;
-            color: white;
-            padding: 20px;
-            border-bottom: 1px solid #34495e;
-        }
-        .header h1 {
-            margin: 0;
-            font-size: 24px;
-        }
-        .content {
-            padding: 20px;
-        }
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #666;
-        }
-        .error {
-            background-color: #e74c3c;
-            color: white;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 20px 0;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Schoology Viewer</h1>
-        </div>
-        <div class="content">
-            <div class="error">HTML template file not found. Please ensure templates/site_viewer.html exists.</div>
-        </div>
-    </div>
-</body>
-</html>
-        """
+            return create_error_response(f"Failed to open folder: {str(e)}")
     
     def set_progress_callback(self, callback):
         """Set the progress callback function."""
         self.progress_callback = callback
     
-    def save_current_paths(self, input_path: str = None, output_path: str = None, template_path: str = None) -> Dict[str, Any]:
+    def save_current_paths(self, cartridge_path: str = None) -> Dict[str, Any]:
         """Save current paths to config file."""
         try:
-            if input_path is not None:
-                self.saved_paths['input_path'] = input_path
-            if output_path is not None:
-                self.saved_paths['output_path'] = output_path
-            if template_path is not None:
-                self.saved_paths['template_path'] = template_path
+            if cartridge_path is not None:
+                self.saved_paths['cartridge_path'] = cartridge_path
             
             self._save_paths()
             return create_success_response("Paths saved")
@@ -975,28 +699,16 @@ def create_html_content():
                     <h2>File Selection</h2>
                     
                     <div class="form-group">
-                        <label for="inputPath">Input Folder (containing .imscc files):</label>
+                        <label for="cartridgePath">Cartridge File (.imscc):</label>
                         <div class="input-group">
-                            <input type="text" id="inputPath" placeholder="Select folder containing .imscc files..." readonly>
-                            <button class="btn btn-secondary" onclick="selectInputFolder()">Browse</button>
+                            <input type="text" id="cartridgePath" placeholder="Select cartridge file..." readonly>
+                            <button class="btn btn-secondary" onclick="selectCartridgeFile()">Browse</button>
+                        </div>
+                        <div style="margin-top: 8px; color: #666; font-size: 13px;">
+                            Output will be created in a folder next to the cartridge with the same name
                         </div>
                     </div>
                     
-                    <div class="form-group">
-                        <label for="outputPath">Output Folder:</label>
-                        <div class="input-group">
-                            <input type="text" id="outputPath" placeholder="Select output folder..." readonly>
-                            <button class="btn btn-secondary" onclick="selectOutputFolder()">Browse</button>
-                        </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="templatePath">Template DOCX File (optional):</label>
-                        <div class="input-group">
-                            <input type="text" id="templatePath" placeholder="Select template DOCX file..." readonly>
-                            <button class="btn btn-secondary" onclick="selectTemplateFile()">Browse</button>
-                        </div>
-                    </div>
                 </div>
                 
                 <div class="section">
@@ -1015,13 +727,7 @@ def create_html_content():
                     
                     <div class="actions" id="actions" style="display: none;">
                         <button class="btn btn-warning" onclick="viewLogFile()">View Log File</button>
-                        <button class="btn btn-success" onclick="openConvertedSite()">View Converted Site</button>
-                    </div>
-                    
-                    <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #f0f0f0;">
-                        <h3>Open Existing Conversion</h3>
-                        <p style="margin-bottom: 20px;">Open a previously converted folder to browse the documents.</p>
-                        <button class="btn btn-secondary" onclick="openExistingFolder()">Browse Existing Folder</button>
+                        <button class="btn btn-success" onclick="openOutputFolder()">Open Output Folder</button>
                     </div>
                 </div>
             </div>
@@ -1040,14 +746,10 @@ def create_html_content():
         
         // Setup event listeners for input fields
         function setupEventListeners() {
-            const inputPath = document.getElementById('inputPath');
-            const outputPath = document.getElementById('outputPath');
-            const templatePath = document.getElementById('templatePath');
+            const cartridgePath = document.getElementById('cartridgePath');
             
             // Add event listeners to save paths when user types
-            inputPath.addEventListener('input', () => debouncedSavePaths());
-            outputPath.addEventListener('input', () => debouncedSavePaths());
-            templatePath.addEventListener('input', () => debouncedSavePaths());
+            cartridgePath.addEventListener('input', () => debouncedSavePaths());
         }
         
         // Debounced function to save paths
@@ -1061,11 +763,9 @@ def create_html_content():
         // Save current paths
         async function saveCurrentPaths() {
             try {
-                const inputPath = document.getElementById('inputPath').value;
-                const outputPath = document.getElementById('outputPath').value;
-                const templatePath = document.getElementById('templatePath').value;
+                const cartridgePath = document.getElementById('cartridgePath').value;
                 
-                await pywebview.api.save_current_paths(inputPath, outputPath, templatePath);
+                await pywebview.api.save_current_paths(cartridgePath);
             } catch (error) {
                 console.error('Error saving paths:', error);
             }
@@ -1080,14 +780,8 @@ def create_html_content():
                 try {
                     const result = await pywebview.api.get_saved_paths();
                     if (result.success) {
-                        if (result.input_path) {
-                            document.getElementById('inputPath').value = result.input_path;
-                        }
-                        if (result.output_path) {
-                            document.getElementById('outputPath').value = result.output_path;
-                        }
-                        if (result.template_path) {
-                            document.getElementById('templatePath').value = result.template_path;
+                        if (result.cartridge_path) {
+                            document.getElementById('cartridgePath').value = result.cartridge_path;
                         }
                         console.log('Saved paths loaded successfully');
                     }
@@ -1139,43 +833,11 @@ def create_html_content():
             document.getElementById('status').style.display = 'none';
         }
         
-        async function selectInputFolder() {
+        async function selectCartridgeFile() {
             try {
-                const result = await pywebview.api.select_folder();
+                const result = await pywebview.api.select_cartridge_file();
                 if (result.success) {
-                    document.getElementById('inputPath').value = result.path;
-                    // Save the path immediately
-                    await saveCurrentPaths();
-                    hideStatus();
-                } else {
-                    showStatus(result.message, 'error');
-                }
-            } catch (error) {
-                showStatus('Error selecting folder: ' + error.message, 'error');
-            }
-        }
-        
-        async function selectOutputFolder() {
-            try {
-                const result = await pywebview.api.select_output_folder();
-                if (result.success) {
-                    document.getElementById('outputPath').value = result.path;
-                    // Save the path immediately
-                    await saveCurrentPaths();
-                    hideStatus();
-                } else {
-                    showStatus(result.message, 'error');
-                }
-            } catch (error) {
-                showStatus('Error selecting folder: ' + error.message, 'error');
-            }
-        }
-        
-        async function selectTemplateFile() {
-            try {
-                const result = await pywebview.api.select_template_file();
-                if (result.success) {
-                    document.getElementById('templatePath').value = result.path;
+                    document.getElementById('cartridgePath').value = result.path;
                     // Save the path immediately
                     await saveCurrentPaths();
                     hideStatus();
@@ -1187,23 +849,22 @@ def create_html_content():
             }
         }
         
+        
         async function startConversion() {
             if (conversionInProgress) {
                 showStatus('Conversion already in progress', 'error');
                 return;
             }
             
-            const inputPath = document.getElementById('inputPath').value;
-            const outputPath = document.getElementById('outputPath').value;
-            const templatePath = document.getElementById('templatePath').value;
+            const cartridgePath = document.getElementById('cartridgePath').value;
             
-            if (!inputPath || !outputPath) {
-                showStatus('Please select both input and output folders', 'error');
+            if (!cartridgePath) {
+                showStatus('Please select a cartridge file', 'error');
                 return;
             }
             
             try {
-                const result = await pywebview.api.start_conversion(inputPath, outputPath, templatePath || null);
+                const result = await pywebview.api.start_conversion(cartridgePath);
                 
                 if (result.success) {
                     conversionInProgress = true;
@@ -1246,9 +907,9 @@ def create_html_content():
                         // Reset progress bar
                         updateProgress('Conversion completed!', 100);
                         
-                        // Add the "View Converted Site" button when conversion completes
+                        // Add the "Open Output Folder" button when conversion completes
                         const actionsDiv = document.getElementById('actions');
-                        actionsDiv.innerHTML = '<button class="btn btn-warning" onclick="viewLogFile()">View Log File</button><button class="btn btn-success" onclick="openConvertedSite()">View Converted Site</button>';
+                        actionsDiv.innerHTML = '<button class="btn btn-warning" onclick="viewLogFile()">View Log File</button><button class="btn btn-success" onclick="openOutputFolder()">Open Output Folder</button>';
                         
                         showStatus('Conversion completed successfully!', 'success');
                     }
@@ -1271,22 +932,9 @@ def create_html_content():
             }
         }
         
-        async function openConvertedSite() {
+        async function openOutputFolder() {
             try {
-                const result = await pywebview.api.open_converted_site();
-                if (result.success) {
-                    showStatus(result.message, 'success');
-                } else {
-                    showStatus(result.message, 'error');
-                }
-            } catch (error) {
-                showStatus('Error opening site: ' + error.message, 'error');
-            }
-        }
-        
-        async function openExistingFolder() {
-            try {
-                const result = await pywebview.api.open_existing_folder();
+                const result = await pywebview.api.open_output_folder();
                 if (result.success) {
                     showStatus(result.message, 'success');
                 } else {
